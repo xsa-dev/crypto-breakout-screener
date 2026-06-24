@@ -1,18 +1,15 @@
 # breakout-persistence-audit-config Specification
 
 ## Purpose
-TBD - created by archiving change define-breakout-strategy-system. Update Purpose after archive.
+Define the reproducible configuration, persistence, replay identifiers, and audit-trace contracts for breakout strategy decisions across research, fake execution, and operator review.
+
 ## Requirements
 ### Requirement: Configuration is versioned and reproducible
-The system SHALL store strategy configuration outside executable code, validate all parameters, version each configuration, and attach config hash/version to backtests and live decisions.
+The system SHALL persist validated breakout configuration versions with stable hashes and attach config hash/version identifiers to signals, risk decisions, fake/live execution records where applicable, and backtest or replay runs.
 
-#### Scenario: Config is invalid
-- **WHEN** configuration contains invalid ranges, missing required parameters, or unsupported mode values
-- **THEN** startup or run creation fails with explicit validation errors
-
-#### Scenario: Config version changes
-- **WHEN** a strategy parameter changes
-- **THEN** the system records a new config version and hash
+#### Scenario: Same config has same hash
+- **WHEN** semantically identical configuration is serialized twice
+- **THEN** the system produces the same config hash
 
 ### Requirement: Stable machine-readable enums are defined
 The system SHALL use stable machine-readable values for modes, level types, scenario types, entry modes, finite-state-machine states, and risk rejection reasons.
@@ -86,15 +83,11 @@ The system SHALL store or reference enough fields to reproduce decisions: canoni
 - **THEN** the system can recompute the same level eligibility, score, scenario, and risk decision or report an explicit unavailable dependency
 
 ### Requirement: Decision trace explains every trade decision
-The system SHALL store decision traces from level discovery through setup score, scenario, risk approval/rejection, execution, position management, and exit.
+The system SHALL create first-class decision traces linking level discovery, feature values, score factors, scenario selection, entry mode, risk approval/rejection, execution/fake execution, position management, exits, and manual overrides.
 
-#### Scenario: Trade is allowed
-- **WHEN** a trade intent is approved and executed
-- **THEN** the trace explains level selection, factor scores, scenario, entry mode, risk sizing, order request, and resulting fills
-
-#### Scenario: Trade is blocked
-- **WHEN** a setup or risk check blocks a trade
-- **THEN** the trace records the blocking reason and all inputs needed to reproduce it
+#### Scenario: Risk rejection is replayable
+- **WHEN** Risk Manager rejects an intent
+- **THEN** the persisted trace includes the triggering signal or setup, risk inputs, rejection reason, config hash, and dataset/reference identifiers needed for replay
 
 ### Requirement: Manual overrides are audited
 The system SHALL record operator confirmations, rejections, manual overrides, and parameter changes with actor, time, reason, and affected entity.

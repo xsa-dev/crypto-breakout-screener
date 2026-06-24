@@ -13,7 +13,12 @@ from sqlalchemy.ext.asyncio import (
 from src.core.env import env
 
 from .models import Base
-from .repositories import SettingsRepository, SignalRepository, TradeRepository
+from .repositories import (
+    BreakoutAuditRepository,
+    SettingsRepository,
+    SignalRepository,
+    TradeRepository,
+)
 
 
 class Database:
@@ -37,6 +42,7 @@ class Database:
         self.settings_repo = SettingsRepository(session)
         self.signal_repo = SignalRepository(session)
         self.trade_repo = TradeRepository(session)
+        self.breakout_audit_repo = BreakoutAuditRepository(session)
 
     @classmethod
     @asynccontextmanager

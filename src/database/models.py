@@ -7,8 +7,9 @@
 """
 
 import datetime
+from typing import Any
 
-from sqlalchemy import func
+from sqlalchemy import JSON, ForeignKey, UniqueConstraint, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -122,3 +123,237 @@ class TradeORM(Base):
 
     error: Mapped[str | None] = mapped_column(default=None)
     """Если по ходу попытки прилетела ошибка от биржи или из кода — короткий текст исключения."""
+
+
+class BreakoutConfigVersionORM(Base):
+    """Validated strategy config snapshot addressed by a stable content hash."""
+
+    __tablename__ = "breakout_config_versions"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(server_default=func.now())
+    config_hash: Mapped[str] = mapped_column(unique=True, index=True)
+    label: Mapped[str | None] = mapped_column(default=None)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+
+
+class MarketBarORM(Base):
+    """Canonical OHLCV bar persisted for replay/backtest datasets."""
+
+    __tablename__ = "market_bars"
+    __table_args__ = (UniqueConstraint("symbol", "timeframe", "ts", name="uq_market_bar_key"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    symbol: Mapped[str] = mapped_column(index=True)
+    timeframe: Mapped[str] = mapped_column(index=True)
+    ts: Mapped[datetime.datetime] = mapped_column(index=True)
+    open: Mapped[float]
+    high: Mapped[float]
+    low: Mapped[float]
+    close: Mapped[float]
+    volume: Mapped[float]
+    source_metadata: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+
+
+class MarketTickORM(Base):
+    """Canonical tick persisted when replay requires tick-level data."""
+
+    __tablename__ = "market_ticks"
+    __table_args__ = (UniqueConstraint("symbol", "ts", name="uq_market_tick_key"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    symbol: Mapped[str] = mapped_column(index=True)
+    ts: Mapped[datetime.datetime] = mapped_column(index=True)
+    bid: Mapped[float | None] = mapped_column(default=None)
+    ask: Mapped[float | None] = mapped_column(default=None)
+    last: Mapped[float | None] = mapped_column(default=None)
+    volume: Mapped[float | None] = mapped_column(default=None)
+    source_metadata: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+
+
+class BreakoutLevelORM(Base):
+    """Persisted level reference used by signals and decision traces."""
+
+    __tablename__ = "breakout_levels"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    level_id: Mapped[str] = mapped_column(unique=True, index=True)
+    symbol: Mapped[str] = mapped_column(index=True)
+    type: Mapped[str]
+    price: Mapped[float]
+    timeframe: Mapped[str]
+    touches: Mapped[int]
+    created_at: Mapped[datetime.datetime]
+    source_indexes: Mapped[list[int]] = mapped_column(JSON, default=list)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+
+
+class BreakoutSignalORM(Base):
+    """Audited breakout signal with score factors and replay identifiers."""
+
+    __tablename__ = "breakout_signals"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(server_default=func.now())
+    symbol: Mapped[str] = mapped_column(index=True)
+    timestamp: Mapped[datetime.datetime] = mapped_column(index=True)
+    side: Mapped[str]
+    scenario: Mapped[str]
+    score: Mapped[int]
+    level_id: Mapped[int | None] = mapped_column(ForeignKey("breakout_levels.id"), default=None)
+    level_payload: Mapped[dict[str, Any] | None] = mapped_column(JSON, default=None)
+    score_payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+    config_hash: Mapped[str] = mapped_column(index=True)
+    dataset_hash: Mapped[str | None] = mapped_column(default=None, index=True)
+
+
+class TradeIntentORM(Base):
+    """Broker-neutral intent generated before risk/execution decisions."""
+
+    __tablename__ = "trade_intents"
+    __table_args__ = (UniqueConstraint("intent_id", name="uq_trade_intent_id"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    intent_id: Mapped[str] = mapped_column(index=True)
+    signal_id: Mapped[int | None] = mapped_column(ForeignKey("breakout_signals.id"), default=None)
+    symbol: Mapped[str] = mapped_column(index=True)
+    side: Mapped[str]
+    entry_mode: Mapped[str]
+    entry_price: Mapped[float]
+    stop_price: Mapped[float]
+    quantity: Mapped[float]
+    is_addon: Mapped[bool] = mapped_column(default=False)
+    config_hash: Mapped[str] = mapped_column(index=True)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+
+
+class RiskEventORM(Base):
+    """Risk approval/rejection event linked to a signal or trade intent."""
+
+    __tablename__ = "risk_events"
+    __table_args__ = (UniqueConstraint("event_id", name="uq_risk_event_id"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    event_id: Mapped[str] = mapped_column(index=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(server_default=func.now())
+    signal_id: Mapped[int | None] = mapped_column(ForeignKey("breakout_signals.id"), default=None)
+    trade_intent_id: Mapped[str | None] = mapped_column(default=None, index=True)
+    approved: Mapped[bool]
+    reason: Mapped[str | None] = mapped_column(default=None, index=True)
+    config_hash: Mapped[str] = mapped_column(index=True)
+    dataset_hash: Mapped[str | None] = mapped_column(default=None, index=True)
+    risk_inputs: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+
+
+class ExecutionOrderORM(Base):
+    """Order request/response record for fake or broker execution."""
+
+    __tablename__ = "execution_orders"
+    __table_args__ = (UniqueConstraint("order_id", name="uq_execution_order_id"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    order_id: Mapped[str] = mapped_column(index=True)
+    signal_id: Mapped[int | None] = mapped_column(ForeignKey("breakout_signals.id"), default=None)
+    intent_id: Mapped[str] = mapped_column(index=True)
+    symbol: Mapped[str] = mapped_column(index=True)
+    side: Mapped[str]
+    quantity: Mapped[float]
+    price: Mapped[float]
+    status: Mapped[str]
+    config_hash: Mapped[str] = mapped_column(index=True)
+    source: Mapped[str] = mapped_column(default="fake")
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+
+
+class ExecutionFillORM(Base):
+    """Fill record linked to an execution order."""
+
+    __tablename__ = "execution_fills"
+    __table_args__ = (UniqueConstraint("fill_id", name="uq_execution_fill_id"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    fill_id: Mapped[str] = mapped_column(index=True)
+    order_id: Mapped[int] = mapped_column(ForeignKey("execution_orders.id"), index=True)
+    timestamp: Mapped[datetime.datetime]
+    fill_price: Mapped[float]
+    fill_quantity: Mapped[float]
+    fee: Mapped[float | None] = mapped_column(default=None)
+    source_metadata: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+
+
+class PositionORM(Base):
+    """Position snapshot linked to fills or aggregated execution state."""
+
+    __tablename__ = "positions"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    symbol: Mapped[str] = mapped_column(index=True)
+    side: Mapped[str]
+    quantity: Mapped[float]
+    average_price: Mapped[float]
+    opening_fill_id: Mapped[int | None] = mapped_column(ForeignKey("execution_fills.id"), default=None)
+    status: Mapped[str] = mapped_column(default="open")
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+
+
+class BacktestRunORM(Base):
+    """Backtest/replay run metadata with config and dataset hashes."""
+
+    __tablename__ = "backtest_runs"
+    __table_args__ = (UniqueConstraint("run_id", name="uq_backtest_run_id"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    run_id: Mapped[str] = mapped_column(index=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(server_default=func.now())
+    config_hash: Mapped[str] = mapped_column(index=True)
+    dataset_hash: Mapped[str] = mapped_column(index=True)
+    started_at: Mapped[datetime.datetime]
+    ended_at: Mapped[datetime.datetime]
+    metrics_payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    artifact_paths: Mapped[list[str]] = mapped_column(JSON, default=list)
+
+
+class OperatorAuditORM(Base):
+    """Manual operator action audit record."""
+
+    __tablename__ = "operator_audits"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(server_default=func.now())
+    action: Mapped[str] = mapped_column(index=True)
+    actor: Mapped[str]
+    affected_entity_type: Mapped[str]
+    affected_entity_id: Mapped[str]
+    reason: Mapped[str | None] = mapped_column(default=None)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+
+
+class DecisionTraceORM(Base):
+    """First-class replay/audit trace for one breakout decision."""
+
+    __tablename__ = "decision_traces"
+    __table_args__ = (UniqueConstraint("trace_id", name="uq_decision_trace_id"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    trace_id: Mapped[str] = mapped_column(index=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(server_default=func.now())
+    signal_id: Mapped[int | None] = mapped_column(ForeignKey("breakout_signals.id"), default=None)
+    trade_intent_id: Mapped[str | None] = mapped_column(default=None, index=True)
+    risk_event_id: Mapped[int | None] = mapped_column(ForeignKey("risk_events.id"), default=None)
+    config_hash: Mapped[str] = mapped_column(index=True)
+    dataset_hash: Mapped[str | None] = mapped_column(default=None, index=True)
+    symbol: Mapped[str] = mapped_column(index=True)
+    side: Mapped[str | None] = mapped_column(default=None)
+    scenario: Mapped[str | None] = mapped_column(default=None)
+    entry_mode: Mapped[str | None] = mapped_column(default=None)
+    status: Mapped[str]
+    level_payload: Mapped[dict[str, Any] | None] = mapped_column(JSON, default=None)
+    feature_payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    score_payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    risk_payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    execution_payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    position_payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    exit_payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    transitions_payload: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    manual_override_ids: Mapped[list[int]] = mapped_column(JSON, default=list)
