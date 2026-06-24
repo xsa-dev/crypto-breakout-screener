@@ -1,11 +1,20 @@
 """Pydantic DTOs for the breakout strategy foundation."""
 
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from src.core.enums import LevelType, OperationMode, ScenarioType, Side, TimeFrame
+from src.core.enums import (
+    EntryMode,
+    FsmState,
+    LevelType,
+    OperationMode,
+    RiskRejectionReason,
+    ScenarioType,
+    Side,
+    TimeFrame,
+)
 
 
 class LevelDetectionConfig(BaseModel):
@@ -158,3 +167,120 @@ class BreakoutScore(BaseModel):
     density: int = Field(ge=0, le=100)
     eligibility: Literal["normal", "reduced", "blocked"]
     rejection_reasons: list[str] = Field(default_factory=list)
+
+
+class MarketSnapshot(BaseModel):
+    """Minimal market state used by deterministic entry/risk tests."""
+
+    symbol: str
+    timestamp: datetime
+    price: float
+    close: float
+    high: float
+    low: float
+    bars_since_breakout: int = Field(default=0, ge=0)
+    micro_impulse: bool = False
+
+
+class TradeIntent(BaseModel):
+    """Broker-neutral trade or add-on intent created before execution."""
+
+    intent_id: str
+    symbol: str
+    side: Side
+    mode: EntryMode
+    entry_price: float
+    stop_price: float
+    quantity: float = Field(gt=0)
+    score: BreakoutScore
+    is_addon: bool = False
+    metadata: dict[str, float | int | str | bool] = Field(default_factory=dict)
+
+
+class RiskLimits(BaseModel):
+    """Configurable local risk limits for deterministic approval tests."""
+
+    equity: float = Field(default=10_000.0, gt=0)
+    risk_pct: float = Field(default=0.01, gt=0, le=1)
+    contract_multiplier: float = Field(default=1.0, gt=0)
+    min_stop_distance: float = Field(default=1e-9, gt=0)
+    max_daily_loss: float = Field(default=1_000.0, gt=0)
+    max_open_positions: int = Field(default=3, ge=0)
+    max_total_risk_pct: float = Field(default=0.02, gt=0, le=1)
+    addon_min_share: float = Field(default=0.10, gt=0, lt=1)
+    addon_max_share: float = Field(default=0.20, gt=0, lt=1)
+    max_addons: int = Field(default=2, ge=0)
+    degrade_avg_price_limit_atr: float = Field(default=1.0, ge=0)
+
+
+class RiskState(BaseModel):
+    """Runtime risk counters supplied to the risk manager."""
+
+    realized_pnl: float = 0.0
+    unrealized_pnl: float = 0.0
+    open_positions: int = 0
+    open_risk: float = 0.0
+    addon_count: int = 0
+    feed_degraded: bool = False
+    broker_state_mismatch: bool = False
+    context_filter_blocked: bool = False
+
+
+class RiskDecision(BaseModel):
+    """Risk approval or rejection result."""
+
+    approved: bool
+    quantity: float = 0.0
+    reason: RiskRejectionReason | None = None
+    planned_risk: float = 0.0
+
+
+class PositionState(BaseModel):
+    """Local broker-neutral position snapshot."""
+
+    symbol: str
+    side: Side
+    quantity: float = Field(ge=0)
+    average_price: float
+
+
+class ExecutionRequest(BaseModel):
+    """Idempotent fake execution order request."""
+
+    request_id: str
+    intent_id: str
+    symbol: str
+    side: Side
+    quantity: float = Field(gt=0)
+    price: float
+
+
+class ExecutionOrder(BaseModel):
+    """Recorded fake order lifecycle."""
+
+    order_id: str
+    request_id: str
+    intent_id: str
+    symbol: str
+    side: Side
+    quantity: float
+    price: float
+    filled_quantity: float = 0.0
+    fill_price: float | None = None
+    status: str = "accepted"
+
+
+class ExecutionSnapshot(BaseModel):
+    """Fake adapter reconciliation snapshot."""
+
+    orders: dict[str, ExecutionOrder] = Field(default_factory=dict)
+    positions: dict[str, PositionState] = Field(default_factory=dict)
+
+
+class LifecycleTransition(BaseModel):
+    """Auditable finite-state-machine transition."""
+
+    from_state: FsmState
+    to_state: FsmState
+    reason: str
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))

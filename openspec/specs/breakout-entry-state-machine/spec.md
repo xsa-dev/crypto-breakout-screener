@@ -1,7 +1,7 @@
 # breakout-entry-state-machine Specification
 
 ## Purpose
-TBD - created by archiving change define-breakout-strategy-system. Update Purpose after archive.
+Define the breakout strategy lifecycle, entry-mode selection, breakout/retest/false-breakout decisions, and auditable state transitions used by downstream risk and execution components.
 ## Requirements
 ### Requirement: Entry engine supports three entry modes
 The system SHALL support pre-entry, at-level entry, and post-breakout entry modes with default base-position shares of 30%, 30%, and 40% respectively.
@@ -30,6 +30,11 @@ The system SHALL support pre-entry, at-level entry, and post-breakout entry mode
 #### Scenario: Post-breakout entry is eligible
 - **WHEN** price closes or ticks beyond `level + breakout_buffer` for long or below symmetric short threshold and score passes threshold
 - **THEN** the system may create a post-breakout entry intent for at most the configured post-breakout share
+
+#### Scenario: Entry share caps are enforced
+- **WHEN** multiple entry modes are eligible for one setup
+- **THEN** each generated intent is capped by its configured share
+- **AND** cumulative planned exposure cannot exceed the configured base position
 
 ### Requirement: Protorgovka range is configurable
 The system SHALL represent the PDF-specific pre-level protorgovka range as `protorgovka_range_percent` with a default accepted range of 0.3% to 2.0% unless overridden by instrument-specific configuration.
@@ -73,7 +78,7 @@ The system SHALL detect false breakout as a strategy state, not only as a stop-l
 - **AND** reversal is allowed only when `allow_reversal_on_false_breakout=true`
 
 ### Requirement: Required finite state machine is preserved
-The system SHALL preserve the logical states `LEVEL_SEARCH`, `SETUP_READY`, `SCENARIO_PICK`, `ENTRY_MODE_PICK`, `POSITION_OPEN`, `BREAKOUT_CONFIRM`, `RETEST_MONITOR`, `ADDON_MONITOR`, `PARTIAL_EXIT`, `FALSE_BREAKOUT`, and `COMPLETE`.
+The system SHALL implement the states `LEVEL_SEARCH`, `SETUP_READY`, `SCENARIO_PICK`, `ENTRY_MODE_PICK`, `POSITION_OPEN`, `BREAKOUT_CONFIRM`, `RETEST_MONITOR`, `ADDON_MONITOR`, `PARTIAL_EXIT`, `FALSE_BREAKOUT`, and `COMPLETE` as stable machine-readable states with transition reason logging.
 
 #### Scenario: Normal breakout lifecycle
 - **WHEN** a valid level, setup, scenario, entry, confirmation, retest/add-on, and exit sequence occurs
@@ -82,6 +87,10 @@ The system SHALL preserve the logical states `LEVEL_SEARCH`, `SETUP_READY`, `SCE
 #### Scenario: Setup breaks down
 - **WHEN** a setup becomes invalid before entry
 - **THEN** the state machine returns to `LEVEL_SEARCH` with a reason code
+
+#### Scenario: Transition history is testable
+- **WHEN** a setup progresses through entry, confirmation, retest/add-on review, and exit
+- **THEN** tests can assert the ordered state transition history and reasons
 
 ### Requirement: Long and short strategy rules are symmetric unless configured otherwise
 The system SHALL support long and short versions of level/setup/entry/confirmation/retest/false-breakout/risk rules. Exceptions such as `fast_exit_for_low_breakouts` SHALL be explicit configuration rather than hidden asymmetry.
