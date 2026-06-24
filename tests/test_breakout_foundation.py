@@ -7,7 +7,13 @@ from src.app.breakout.level_engine import LevelEngine
 from src.app.breakout.normalizer import Normalizer
 from src.app.breakout.setup_scoring import SetupEvaluator
 from src.core.enums import LevelType, OperationMode, ScenarioType, Side, TimeFrame
-from src.core.models import BreakoutStrategyConfig, FeatureVector, LevelDetectionConfig
+from src.core.models import (
+    BreakoutStrategyConfig,
+    ContextDriverSignal,
+    ContextFilterConfig,
+    FeatureVector,
+    LevelDetectionConfig,
+)
 from src.core.schemas import Bar, OrderBookLevel
 
 
@@ -221,3 +227,47 @@ def test_setup_score_is_side_symmetric_for_trend() -> None:
 
     assert long_score.trend == 0
     assert short_score.trend == 20
+
+
+def test_context_filter_penalizes_or_blocks_only_opposed_side() -> None:
+    evaluator = SetupEvaluator(
+        context_config=ContextFilterConfig(hard_block_threshold=0.80, full_strength_penalty=20)
+    )
+    features = FeatureVector(
+        symbol="XAUUSD",
+        timestamp=datetime(2026, 1, 1, tzinfo=UTC),
+        atr=1.0,
+        ema_fast=105,
+        ema_slow=100,
+        adx=30,
+        consolidation_range_atr=1.0,
+        approach_velocity=0.2,
+        activity_ratio=1.3,
+        density_available=True,
+        density_supports_breakout=True,
+    )
+    moderate_opposition = ContextDriverSignal(
+        name="DXY",
+        opposes_side=Side.LONG,
+        strength=0.50,
+        reason="dollar_bid_against_long_gold",
+    )
+    strong_opposition = moderate_opposition.model_copy(update={"strength": 0.90})
+
+    penalized = evaluator.score(features, side=Side.LONG, context_drivers=[moderate_opposition])
+    blocked = evaluator.score(features, side=Side.LONG, context_drivers=[strong_opposition])
+    unaffected_short = evaluator.score(features, side=Side.SHORT, context_drivers=[strong_opposition])
+
+    assert penalized.total == 90
+    assert penalized.eligibility == "normal"
+    assert penalized.rejection_reasons == [
+        "context_filter_penalty",
+        "context_driver:DXY:dollar_bid_against_long_gold",
+    ]
+    assert blocked.total == 100
+    assert blocked.eligibility == "blocked"
+    assert blocked.rejection_reasons == [
+        "context_filter_blocked",
+        "context_driver:DXY:dollar_bid_against_long_gold",
+    ]
+    assert unaffected_short.rejection_reasons == []

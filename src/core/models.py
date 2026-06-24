@@ -67,6 +67,23 @@ class TrendFilterConfig(BaseModel):
         return self
 
 
+class ContextFilterConfig(BaseModel):
+    """Configuration for local setup context filters."""
+
+    enabled: bool = True
+    hard_block_threshold: float = Field(default=0.80, ge=0, le=1)
+    full_strength_penalty: int = Field(default=20, ge=0, le=100)
+
+
+class ContextDriverSignal(BaseModel):
+    """Deterministic upstream context-driver opposition signal."""
+
+    name: str = Field(min_length=1)
+    opposes_side: Side
+    strength: float = Field(ge=0, le=1)
+    reason: str | None = None
+
+
 class ScoreConfig(BaseModel):
     """Configuration for breakout score weighting."""
 
@@ -117,6 +134,7 @@ class BreakoutStrategyConfig(BaseModel):
     level_detection: LevelDetectionConfig = Field(default_factory=LevelDetectionConfig)
     setup: SetupConfig = Field(default_factory=SetupConfig)
     trend_filter: TrendFilterConfig = Field(default_factory=TrendFilterConfig)
+    context_filter: ContextFilterConfig = Field(default_factory=ContextFilterConfig)
     score: ScoreConfig = Field(default_factory=ScoreConfig)
     entries: EntryConfig = Field(default_factory=EntryConfig)
 

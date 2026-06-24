@@ -5,6 +5,8 @@ from typing import Literal
 from src.core.enums import ScenarioType, Side
 from src.core.models import (
     BreakoutScore,
+    ContextDriverSignal,
+    ContextFilterConfig,
     FeatureVector,
     ScoreConfig,
     SetupConfig,
@@ -24,10 +26,12 @@ class SetupEvaluator:
         *,
         setup_config: SetupConfig | None = None,
         trend_config: TrendFilterConfig | None = None,
+        context_config: ContextFilterConfig | None = None,
     ) -> None:
         self.config = config or ScoreConfig()
         self.setup_config = setup_config or SetupConfig()
         self.trend_config = trend_config or TrendFilterConfig()
+        self.context_config = context_config or ContextFilterConfig()
 
     def calculate_features(
         self,
@@ -71,6 +75,7 @@ class SetupEvaluator:
         *,
         side: Side = Side.LONG,
         scenario: ScenarioType = ScenarioType.CONSOLIDATION_BREAKOUT,
+        context_drivers: list[ContextDriverSignal] | None = None,
     ) -> BreakoutScore:
         """Calculate weighted 0-100 breakout score."""
 
@@ -79,9 +84,16 @@ class SetupEvaluator:
         trend = self._score_trend(features, side=side)
         activity = self._score_activity(features)
         density = self._score_density(features)
-        total = consolidation + slow_approach + trend + activity + density
-        eligibility = self.eligibility(total)
-        rejection_reasons = ["score_too_low"] if eligibility == "blocked" else []
+        base_total = consolidation + slow_approach + trend + activity + density
+        total, context_reasons, hard_blocked = self._apply_context_filters(
+            base_total,
+            side=side,
+            context_drivers=context_drivers or [],
+        )
+        eligibility = "blocked" if hard_blocked else self.eligibility(total)
+        rejection_reasons = context_reasons
+        if eligibility == "blocked" and total < self.config.threshold_reduced:
+            rejection_reasons = [*rejection_reasons, "score_too_low"]
 
         return BreakoutScore(
             symbol=features.symbol,
@@ -96,6 +108,33 @@ class SetupEvaluator:
             eligibility=eligibility,
             rejection_reasons=rejection_reasons,
         )
+
+    def _apply_context_filters(
+        self,
+        total: int,
+        *,
+        side: Side,
+        context_drivers: list[ContextDriverSignal],
+    ) -> tuple[int, list[str], bool]:
+        """Apply deterministic side-aware context penalties and hard blocks."""
+
+        if not self.context_config.enabled or not context_drivers:
+            return total, [], False
+
+        opposing = [driver for driver in context_drivers if driver.opposes_side == side]
+        if not opposing:
+            return total, [], False
+
+        strongest = max(opposing, key=lambda driver: driver.strength)
+        driver_reason = strongest.reason or strongest.name
+        reason = f"context_driver:{strongest.name}:{driver_reason}"
+        if strongest.strength >= self.context_config.hard_block_threshold:
+            return total, ["context_filter_blocked", reason], True
+
+        penalty = round(self.context_config.full_strength_penalty * strongest.strength)
+        adjusted_total = max(0, total - penalty)
+        reasons = ["context_filter_penalty", reason] if penalty > 0 else []
+        return adjusted_total, reasons, False
 
     def eligibility(self, total: int) -> Eligibility:
         """Return baseline eligibility bucket for a score."""
