@@ -308,3 +308,102 @@ class LifecycleTransition(BaseModel):
     to_state: FsmState
     reason: str
     timestamp: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
+
+
+class BacktestCostModel(BaseModel):
+    """Explicit local trading-cost assumptions for acceptance-quality backtests."""
+
+    spread: float = Field(default=0.0, ge=0)
+    commission_per_unit: float = Field(default=0.0, ge=0)
+    slippage_per_unit: float = Field(default=0.0, ge=0)
+    funding_per_bar: float = Field(default=0.0, ge=0)
+    acceptance_quality: bool = True
+
+
+class BacktestConfig(BaseModel):
+    """Deterministic local backtest configuration."""
+
+    initial_equity: float = Field(default=10_000.0, gt=0)
+    base_quantity: float = Field(default=1.0, gt=0)
+    stop_distance: float = Field(default=1.0, gt=0)
+    min_warmup_bars: int = Field(default=20, ge=1)
+    random_seed: int = 0
+    cost_model: BacktestCostModel = Field(default_factory=BacktestCostModel)
+    strategy: BreakoutStrategyConfig = Field(default_factory=BreakoutStrategyConfig)
+    export_parquet: bool = False
+
+    @model_validator(mode="after")
+    def validate_acceptance_costs(self) -> "BacktestConfig":
+        if self.cost_model.acceptance_quality and (
+            self.cost_model.spread <= 0
+            and self.cost_model.commission_per_unit <= 0
+            and self.cost_model.slippage_per_unit <= 0
+            and self.cost_model.funding_per_bar <= 0
+        ):
+            msg = "acceptance-quality backtests require explicit non-zero cost assumptions"
+            raise ValueError(msg)
+        return self
+
+
+class BacktestTrade(BaseModel):
+    """Single deterministic simulated trade."""
+
+    trade_id: str
+    symbol: str
+    side: Side
+    entry_time: datetime
+    exit_time: datetime
+    entry_price: float
+    exit_price: float
+    quantity: float
+    gross_pnl: float
+    total_cost: float
+    net_pnl: float
+    holding_bars: int
+    scenario: ScenarioType
+    score: int
+    slippage: float
+    metadata: dict[str, float | int | str | bool] = Field(default_factory=dict)
+
+
+class BacktestWindow(BaseModel):
+    """Named contiguous validation window."""
+
+    name: str
+    start_index: int
+    end_index: int
+    role: Literal["is", "oos", "train", "validate", "forward"]
+
+
+class MonteCarloResult(BaseModel):
+    """Seeded local Monte Carlo robustness summary."""
+
+    seed: int
+    iterations: int
+    method: str
+    median_net_pnl: float
+    worst_net_pnl: float
+    best_net_pnl: float
+
+
+class BacktestReport(BaseModel):
+    """Reproducible backtest report artifact manifest and payload."""
+
+    run_id: str
+    config_hash: str
+    dataset_hash: str
+    time_range: tuple[datetime, datetime]
+    parameter_snapshot: dict[str, object]
+    metrics: dict[str, float | int | str | None]
+    unavailable_reasons: dict[str, str] = Field(default_factory=dict)
+    equity_curve: list[dict[str, float | str]] = Field(default_factory=list)
+    drawdown_curve: list[dict[str, float | str]] = Field(default_factory=list)
+    return_distribution: list[float] = Field(default_factory=list)
+    trades: list[BacktestTrade] = Field(default_factory=list)
+    scenario_breakdown: dict[str, int] = Field(default_factory=dict)
+    score_distribution: dict[str, int] = Field(default_factory=dict)
+    false_breakout_analysis: dict[str, int] = Field(default_factory=dict)
+    slippage_report: dict[str, float] = Field(default_factory=dict)
+    windows: list[BacktestWindow] = Field(default_factory=list)
+    monte_carlo: MonteCarloResult | None = None
+    artifact_paths: list[str] = Field(default_factory=list)

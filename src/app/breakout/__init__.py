@@ -1,6 +1,7 @@
 """Breakout strategy foundation package."""
 
 __all__ = [
+    "BacktestEngine",
     "EntryEngine",
     "FakeExecutionAdapter",
     "HealthMonitor",
@@ -12,6 +13,7 @@ __all__ = [
     "SetupEvaluator",
 ]
 
+from src.app.breakout.backtesting import BacktestEngine
 from src.app.breakout.entry_engine import EntryEngine, LifecycleEngine
 from src.app.breakout.execution import FakeExecutionAdapter
 from src.app.breakout.health import HealthMonitor
