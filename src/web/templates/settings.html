@@ -1,0 +1,108 @@
+{% extends "base.html" %}
+{% block title %}Настройки — Tradebot Admin{% endblock %}
+
+{% block content %}
+<h1>Настройки робота</h1>
+
+{% if saved %}
+  <div class="flash">Настройки сохранены</div>
+{% endif %}
+
+{% if errors %}
+  <div class="errors">
+    <strong>Ошибки валидации:</strong>
+    <ul>
+      {% for err in errors %}
+        <li>{{ err.loc | join('.') }}: {{ err.msg }}</li>
+      {% endfor %}
+    </ul>
+  </div>
+{% endif %}
+
+<form method="post" action="/settings">
+  <div class="panel">
+    <h2 style="margin-top: 0;">Общие</h2>
+    <div class="grid">
+      <div class="checkbox">
+        <input type="checkbox" name="enabled" id="enabled" value="true"
+               {% if settings.enabled %}checked{% endif %}>
+        <label for="enabled">Главный рубильник (enabled)</label>
+      </div>
+      <div class="checkbox">
+        <input type="checkbox" name="trading_enabled" id="trading_enabled" value="true"
+               {% if settings.trading_enabled %}checked{% endif %}>
+        <label for="trading_enabled">Торговля включена (trading_enabled)</label>
+      </div>
+    </div>
+
+    <h2>Скринер</h2>
+    <div class="grid">
+      <div class="field">
+        <label for="pump_threshold_percent">Порог пампа, %</label>
+        <input type="number" step="0.01" min="0" name="pump_threshold_percent"
+               id="pump_threshold_percent" value="{{ settings.pump_threshold_percent }}" required>
+        <span class="hint">На сколько % текущая цена выше минимума окна</span>
+      </div>
+      <div class="field">
+        <label for="window_seconds">Окно, сек</label>
+        <input type="number" step="1" min="1" name="window_seconds"
+               id="window_seconds" value="{{ settings.window_seconds }}" required>
+      </div>
+      <div class="field">
+        <label for="min_daily_volume_usdt">Мин. 24h-объём, USDT (пусто — без фильтра)</label>
+        <input type="number" step="1" min="0" name="min_daily_volume_usdt"
+               id="min_daily_volume_usdt"
+               value="{{ settings.min_daily_volume_usdt if settings.min_daily_volume_usdt is not none else '' }}">
+      </div>
+      <div class="field">
+        <label for="cooldown_minutes">Кулдаун по тикеру, мин</label>
+        <input type="number" step="1" min="0" name="cooldown_minutes"
+               id="cooldown_minutes" value="{{ settings.cooldown_minutes }}" required>
+      </div>
+      <div class="field" style="grid-column: 1 / -1;">
+        <label for="blacklist">Blacklist (через запятую)</label>
+        <input type="text" name="blacklist" id="blacklist"
+               value="{{ settings.blacklist or '' }}" placeholder="BTC,ETH,SOL">
+      </div>
+    </div>
+
+    <h2>Торговля</h2>
+    <div class="grid">
+      <div class="field">
+        <label for="order_size_usdt">Размер сделки, USDT</label>
+        <input type="number" step="0.01" min="0" name="order_size_usdt"
+               id="order_size_usdt" value="{{ settings.order_size_usdt }}" required>
+      </div>
+      <div class="field">
+        <label for="max_concurrent_trades">Макс. одновременных сделок</label>
+        <input type="number" step="1" min="1" name="max_concurrent_trades"
+               id="max_concurrent_trades" value="{{ settings.max_concurrent_trades }}" required>
+      </div>
+      <div class="field">
+        <label for="entry_fib_level">Fib-уровень входа (0..1)</label>
+        <input type="number" step="0.01" min="0" max="1" name="entry_fib_level"
+               id="entry_fib_level" value="{{ settings.entry_fib_level }}" required>
+      </div>
+      <div class="field">
+        <label for="order_ttl_seconds">TTL лимитки, сек</label>
+        <input type="number" step="1" min="1" name="order_ttl_seconds"
+               id="order_ttl_seconds" value="{{ settings.order_ttl_seconds }}" required>
+      </div>
+      <div class="field">
+        <label for="take_profit_fib">Take Profit (fib, &lt;0 и &gt;1 допустимы)</label>
+        <input type="number" step="0.01" name="take_profit_fib"
+               id="take_profit_fib" value="{{ settings.take_profit_fib }}" required>
+      </div>
+      <div class="field">
+        <label for="stop_loss_fib">Stop Loss (fib, &lt;0 и &gt;1 допустимы)</label>
+        <input type="number" step="0.01" name="stop_loss_fib"
+               id="stop_loss_fib" value="{{ settings.stop_loss_fib }}" required>
+      </div>
+    </div>
+
+    <div class="actions">
+      <button type="submit" class="primary">Сохранить</button>
+    </div>
+  </div>
+</form>
+{% endblock %}

@@ -1,0 +1,16 @@
+schema: spec-driven
+
+context: |
+  Python 3.13+ educational crypto trading bot template using uv.
+  The project uses src/ layout with two processes: `uv run python -m src.app` for the Bybit pump screener/tradebot and `uv run uvicorn src.web.__main__:app --host 0.0.0.0 --port 8000` for the FastAPI/Jinja admin UI.
+  Runtime settings live in SQLite as singleton `settings` id=1. Secrets and infrastructure config live in `.env`/`.env.example`. Technical constants live in `src/core/config.py`.
+  Use absolute imports from `src.*`, loguru for logging, Pydantic v2 for form/DTO validation, TypedDict for normalized market data, and uv for all Python commands.
+  This repository currently is not a git repository; do not assume git status/commit workflows are available unless git is initialized later.
+
+rules:
+  proposal:
+    - Include explicit Non-Goals when narrowing trading scope.
+    - Mark SQLite schema contract changes as breaking when they require DB recreation or migration.
+  tasks:
+    - Include verification commands and note if live exchange/API smoke must be skipped without credentials.
+    - Separate source implementation, schema/data handling, admin UI, and verification tasks.

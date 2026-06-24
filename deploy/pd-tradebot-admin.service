@@ -1,0 +1,20 @@
+[Unit]
+Description=PD Tradebot - web admin (FastAPI/uvicorn)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/pd-tradebot
+EnvironmentFile=/root/pd-tradebot/.env
+ExecStart=/root/pd-tradebot/.venv/bin/python -m uvicorn src.web.__main__:app --host 0.0.0.0 --port 8000
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+KillSignal=SIGINT
+TimeoutStopSec=20
+
+[Install]
+WantedBy=multi-user.target

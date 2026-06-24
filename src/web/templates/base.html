@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Tradebot Admin{% endblock %}</title>
+  <style>
+    :root {
+      --bg: #0f1419;
+      --panel: #161c24;
+      --panel-2: #1c232e;
+      --border: #2a3441;
+      --text: #e6edf3;
+      --muted: #8b949e;
+      --accent: #4493f8;
+      --accent-hover: #58a6ff;
+      --success: #3fb950;
+      --danger: #f85149;
+      --warn: #d29922;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    header {
+      background: var(--panel);
+      border-bottom: 1px solid var(--border);
+      padding: 0 24px;
+    }
+
+    nav {
+      max-width: 1100px;
+      margin: 0 auto;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      height: 52px;
+    }
+
+    nav .brand {
+      font-weight: 600;
+      color: var(--text);
+      margin-right: 24px;
+      letter-spacing: 0.3px;
+    }
+
+    nav a {
+      color: var(--muted);
+      text-decoration: none;
+      padding: 8px 14px;
+      border-radius: 6px;
+      transition: background 0.15s, color 0.15s;
+    }
+
+    nav a:hover { background: var(--panel-2); color: var(--text); }
+    nav a.active { color: var(--text); background: var(--panel-2); }
+    nav .spacer { flex: 1; }
+    nav a.logout { color: var(--muted); }
+    nav a.logout:hover { color: var(--danger); }
+
+    main {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 28px 24px 48px;
+    }
+
+    h1 {
+      font-size: 22px;
+      font-weight: 600;
+      margin: 0 0 20px;
+    }
+
+    h2 {
+      font-size: 15px;
+      font-weight: 600;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.6px;
+      margin: 28px 0 12px;
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 20px 24px;
+    }
+
+    .flash {
+      background: rgba(63, 185, 80, 0.12);
+      border: 1px solid rgba(63, 185, 80, 0.35);
+      color: var(--success);
+      padding: 10px 14px;
+      border-radius: 6px;
+      margin-bottom: 18px;
+    }
+
+    .errors {
+      background: rgba(248, 81, 73, 0.10);
+      border: 1px solid rgba(248, 81, 73, 0.35);
+      color: var(--danger);
+      padding: 10px 14px;
+      border-radius: 6px;
+      margin-bottom: 18px;
+    }
+    .errors ul { margin: 6px 0 0 18px; padding: 0; }
+
+    /* Формы */
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 16px 24px;
+    }
+    @media (max-width: 720px) {
+      .grid { grid-template-columns: 1fr; }
+    }
+
+    .field { display: flex; flex-direction: column; gap: 6px; }
+    .field label {
+      font-size: 12px;
+      color: var(--muted);
+      font-weight: 500;
+    }
+    .field .hint { font-size: 11px; color: var(--muted); }
+
+    input[type="text"],
+    input[type="number"],
+    input[type="password"] {
+      background: var(--panel-2);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 8px 10px;
+      border-radius: 6px;
+      font-size: 14px;
+      font-family: inherit;
+      transition: border-color 0.15s;
+    }
+    input:focus { outline: none; border-color: var(--accent); }
+
+    .checkbox {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 10px;
+      background: var(--panel-2);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+    }
+    .checkbox input { accent-color: var(--accent); width: 16px; height: 16px; }
+    .checkbox label { color: var(--text); font-size: 14px; }
+
+    .actions { margin-top: 24px; display: flex; gap: 10px; }
+
+    button.primary {
+      background: var(--accent);
+      color: white;
+      border: none;
+      padding: 9px 18px;
+      border-radius: 6px;
+      font-weight: 500;
+      font-size: 14px;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    button.primary:hover { background: var(--accent-hover); }
+
+    /* Таблицы */
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    th, td {
+      padding: 10px 12px;
+      text-align: left;
+      border-bottom: 1px solid var(--border);
+    }
+    th {
+      color: var(--muted);
+      font-weight: 500;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      background: var(--panel-2);
+    }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: var(--panel-2); }
+    td.num, th.num {
+      font-family: "SF Mono", Menlo, Consolas, monospace;
+      text-align: right;
+    }
+    td.muted { color: var(--muted); }
+
+    .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.4px;
+    }
+    .badge.executed { background: rgba(63, 185, 80, 0.15); color: var(--success); }
+    .badge.rejected { background: rgba(248, 81, 73, 0.15); color: var(--danger); }
+
+    .empty {
+      padding: 40px;
+      text-align: center;
+      color: var(--muted);
+    }
+  </style>
+</head>
+<body>
+  {% block body %}
+  <header>
+    <nav>
+      <span class="brand">Tradebot Admin</span>
+      <a href="/" class="{% if active == 'settings' %}active{% endif %}">Настройки</a>
+      <a href="/signals" class="{% if active == 'signals' %}active{% endif %}">Сигналы</a>
+      <a href="/trades" class="{% if active == 'trades' %}active{% endif %}">Сделки</a>
+      <span class="spacer"></span>
+      <a href="/logout" class="logout">Выйти</a>
+    </nav>
+  </header>
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+  {% endblock %}
+</body>
+</html>

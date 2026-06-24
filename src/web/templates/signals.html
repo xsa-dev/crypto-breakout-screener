@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}Сигналы — Tradebot Admin{% endblock %}
+
+{% block content %}
+<h1>Последние сигналы</h1>
+
+<div class="panel" style="padding: 0;">
+  {% if signals %}
+    <table>
+      <thead>
+        <tr>
+          <th class="num">ID</th>
+          <th>Время (UTC)</th>
+          <th>Тикер</th>
+          <th class="num">Цена</th>
+          <th class="num">Изменение, %</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for sig in signals %}
+          <tr>
+            <td class="num muted">{{ sig.id }}</td>
+            <td>{{ sig.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+            <td>{{ sig.symbol }}</td>
+            <td class="num">{{ sig.price }}</td>
+            <td class="num">{{ '%.2f' | format(sig.price_change_percent) }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <div class="empty">Пока нет сигналов</div>
+  {% endif %}
+</div>
+{% endblock %}

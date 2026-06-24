@@ -1,0 +1,157 @@
+# ============================================================
+# Secrets & environment
+# ============================================================
+.env
+.env.*
+!.env.dist
+!.env.example
+!.env.template
+.pypirc
+
+# ============================================================
+# Local config files (secrets, API keys, runtime settings)
+# Project configs like pyproject.toml / ruff.toml — НЕ игнорим.
+# ============================================================
+config.json
+config.yaml
+config.yml
+config.toml
+secrets.json
+secrets.yaml
+secrets.yml
+secrets.toml
+*.local.json
+*.local.yaml
+*.local.yml
+*.local.toml
+*.secret.json
+*.secret.yaml
+*.secret.yml
+*.secret.toml
+
+# OpenSpec config is project metadata, not a runtime secret.
+!openspec/config.yaml
+
+# ============================================================
+# Logs
+# ============================================================
+logs/
+log/
+*.log
+
+# ============================================================
+# Databases
+# ============================================================
+*.db
+*.sqlite
+*.sqlite3
+*.sqlite3-journal
+
+# ============================================================
+# Python: byte-compiled / cache
+# ============================================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# ============================================================
+# Python: virtual environments
+# ============================================================
+.venv/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# ============================================================
+# Python: distribution / packaging
+# ============================================================
+.Python
+build/
+dist/
+develop-eggs/
+downloads/
+eggs/
+.eggs/
+sdist/
+wheels/
+share/python-wheels/
+*.egg
+*.egg-info/
+.installed.cfg
+MANIFEST
+
+# ============================================================
+# Python: tooling caches
+# ============================================================
+.ruff_cache/
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pytest_cache/
+.tox/
+.nox/
+.hypothesis/
+.cache
+
+# ============================================================
+# Python: coverage
+# ============================================================
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+*.cover
+*.py,cover
+nosetests.xml
+
+# ============================================================
+# Python: package managers (lock-файлы коммитим)
+# ============================================================
+pip-log.txt
+pip-delete-this-directory.txt
+.pdm.toml
+.pdm-python
+.pdm-build/
+__pypackages__/
+
+# ============================================================
+# IDE: VSCode (settings.json коммитим — там общие настройки команды)
+# ============================================================
+.vscode/*
+!.vscode/settings.json
+
+# ============================================================
+# IDE: JetBrains / прочее
+# ============================================================
+.idea/
+*.swp
+*.swo
+
+# ============================================================
+# OS
+# ============================================================
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# ============================================================
+# Claude Code / агенты (скилы коммитим, локальные настройки — нет)
+# ============================================================
+.claude/settings.local.json
+.claude/.credentials.json
+.playwright-mcp/
+
+# ============================================================
+# Прочее
+# ============================================================
+*.bak
+*.tmp
+
+# Project lockfile is committed even if a global gitignore ignores it.
+!uv.lock

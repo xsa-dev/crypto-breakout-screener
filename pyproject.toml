@@ -1,0 +1,47 @@
+[project]
+name = "ayazsh-project-template"
+version = "0.1.0"
+description = "Шаблон проектов курса Ayaz Sh по крипто-разработке через AI-агентов."
+requires-python = ">=3.13"
+dependencies = [
+    "aiohttp>=3.13.5",
+    "aiosqlite>=0.22.1",
+    "fastapi>=0.136.3",
+    "itsdangerous>=2.2.0",
+    "jinja2>=3.1.6",
+    "loguru>=0.7",
+    "pydantic-settings>=2.0",
+    "python-multipart>=0.0.29",
+    "sqlalchemy[asyncio]>=2.0.50",
+    "unicex>=0.28.1",
+    "uvicorn[standard]>=0.48.0",
+]
+
+[tool.uv]
+# Проект не устанавливается как пакет: запускаем из корня (`python -m src.app`),
+# поэтому `src` импортируется напрямую — сборка и editable-install не нужны.
+package = false
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+extend-exclude = [".claude", ".codex", "examples"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+ignore = ["E501"]
+
+[tool.pyright]
+pythonVersion = "3.13"
+typeCheckingMode = "basic"
+include = ["src"]
+exclude = [".venv", ".claude", ".codex", "examples"]
+ignore = [".claude", ".codex", "examples"]
+reportMissingTypeStubs = "none"
+
+[dependency-groups]
+dev = [
+    "pyright>=1.1.409",
+    "pytest>=9.1.1",
+    "ruff>=0.15.13",
+]

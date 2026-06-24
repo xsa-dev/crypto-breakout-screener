@@ -1,0 +1,20 @@
+[Unit]
+Description=PD Tradebot - main logic (screener + trading)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/pd-tradebot
+EnvironmentFile=/root/pd-tradebot/.env
+ExecStart=/root/pd-tradebot/.venv/bin/python -m src.app
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+KillSignal=SIGINT
+TimeoutStopSec=20
+
+[Install]
+WantedBy=multi-user.target

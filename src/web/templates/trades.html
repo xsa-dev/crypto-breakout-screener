@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Сделки — Tradebot Admin{% endblock %}
+
+{% block content %}
+<h1>Последние сделки</h1>
+
+<div class="panel" style="padding: 0;">
+  {% if trades %}
+    <table>
+      <thead>
+        <tr>
+          <th class="num">ID</th>
+          <th>Время (UTC)</th>
+          <th>Тикер</th>
+          <th>Статус</th>
+          <th class="num">Entry price</th>
+          <th>Reject reason</th>
+          <th>Error</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for tr in trades %}
+          <tr>
+            <td class="num muted">{{ tr.id }}</td>
+            <td>{{ tr.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+            <td>{{ tr.symbol }}</td>
+            <td><span class="badge {{ tr.status }}">{{ tr.status }}</span></td>
+            <td class="num">{{ tr.entry_price if tr.entry_price is not none else '—' }}</td>
+            <td class="muted">{{ tr.reject_reason or '—' }}</td>
+            <td class="muted">{{ tr.error or '—' }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <div class="empty">Пока нет сделок</div>
+  {% endif %}
+</div>
+{% endblock %}
