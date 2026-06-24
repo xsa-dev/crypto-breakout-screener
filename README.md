@@ -33,6 +33,12 @@ uv run ruff check .
 uv run pyright
 ```
 
+## Breakout strategy operations
+
+Для локальной эксплуатации, degraded-mode проверок, dry-run/fake execution,
+security notes, runbook и QA methodology по breakout-стратегии см.
+`docs/breakout-operations.md`.
+
 ## Где что лежит
 
 - `AGENTS.md` — правила для AI-агентов и структура проектов курса.

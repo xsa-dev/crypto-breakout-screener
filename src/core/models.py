@@ -223,6 +223,8 @@ class RiskState(BaseModel):
     addon_count: int = 0
     feed_degraded: bool = False
     broker_state_mismatch: bool = False
+    config_invalid: bool = False
+    degraded_reasons: list[str] = Field(default_factory=list)
     context_filter_blocked: bool = False
 
 
@@ -233,6 +235,28 @@ class RiskDecision(BaseModel):
     quantity: float = 0.0
     reason: RiskRejectionReason | None = None
     planned_risk: float = 0.0
+    metadata: dict[str, str | int | float | bool | list[str]] = Field(default_factory=dict)
+
+
+class HealthCheck(BaseModel):
+    """Single local health check result used for degraded-mode decisions."""
+
+    name: str
+    status: Literal["healthy", "degraded"] = "healthy"
+    reason: str | None = None
+    details: dict[str, str | int | float | bool] = Field(default_factory=dict)
+
+
+class HealthReport(BaseModel):
+    """Aggregated local health report with machine-readable degraded reasons."""
+
+    status: Literal["healthy", "degraded"] = "healthy"
+    checks: list[HealthCheck] = Field(default_factory=list)
+    generated_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
+
+    @property
+    def degraded_reasons(self) -> list[str]:
+        return [check.reason for check in self.checks if check.status == "degraded" and check.reason]
 
 
 class PositionState(BaseModel):

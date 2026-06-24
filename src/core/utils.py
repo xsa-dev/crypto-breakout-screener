@@ -1,11 +1,30 @@
 """Утилиты приложения: переиспользуемые, неспецифичные хелперы."""
 
-__all__ = ["TelegramBot", "TimeoutTracker"]
+__all__ = ["TelegramBot", "TimeoutTracker", "redact_secret_values"]
 
 import time
 
 import aiohttp
 from loguru import logger
+
+
+def redact_secret_values(text: str, secrets: list[str] | tuple[str, ...] = ()) -> str:
+    """Redact known secret values and common token shapes from log-safe text."""
+
+    redacted = text
+    for secret in secrets:
+        if secret:
+            redacted = redacted.replace(secret, "[REDACTED]")
+
+    # Telegram bot tokens have the shape '<digits>:<long token>'. Avoid a regex
+    # dependency and redact conservatively word-by-word.
+    parts = redacted.split()
+    for part in parts:
+        token = part.strip("'\"()[]{}<>,.;")
+        prefix, separator, suffix = token.partition(":")
+        if separator and prefix.isdigit() and len(suffix) >= 20:
+            redacted = redacted.replace(token, "[REDACTED]")
+    return redacted
 
 
 class TelegramBot:
@@ -47,9 +66,11 @@ class TelegramBot:
             async with session.post(url, json=payload) as resp:
                 if resp.status != 200:
                     body = await resp.text()
-                    logger.error(f"Telegram send failed: status={resp.status} body={body}")
+                    safe_body = redact_secret_values(body, (self._bot_token,))
+                    logger.error(f"Telegram send failed: status={resp.status} body={safe_body}")
         except Exception as e:
-            logger.exception(f"Telegram send error: {e}")
+            safe_error = redact_secret_values(str(e), (self._bot_token,))
+            logger.exception(f"Telegram send error: {safe_error}")
 
     async def close(self) -> None:
         """Закрывает HTTP-сессию. Вызывать при остановке приложения."""

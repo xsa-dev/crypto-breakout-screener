@@ -3,6 +3,7 @@
 __all__ = [
     "EntryEngine",
     "FakeExecutionAdapter",
+    "HealthMonitor",
     "LevelEngine",
     "LifecycleEngine",
     "MarketDataProvider",
@@ -13,6 +14,7 @@ __all__ = [
 
 from src.app.breakout.entry_engine import EntryEngine, LifecycleEngine
 from src.app.breakout.execution import FakeExecutionAdapter
+from src.app.breakout.health import HealthMonitor
 from src.app.breakout.level_engine import LevelEngine
 from src.app.breakout.normalizer import Normalizer
 from src.app.breakout.providers import MarketDataProvider

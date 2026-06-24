@@ -69,6 +69,8 @@ class RiskRejectionReason(StrEnum):
     ADDON_DEGRADES_AVERAGE = "addon_degrades_average"
     FEED_DEGRADED = "feed_degraded"
     BROKER_STATE_MISMATCH = "broker_state_mismatch"
+    CONFIG_INVALID = "config_invalid"
+    HEALTH_DEGRADED = "health_degraded"
 
 
 class TimeFrame(StrEnum):

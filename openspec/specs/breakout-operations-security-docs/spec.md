@@ -1,19 +1,15 @@
 # breakout-operations-security-docs Specification
 
 ## Purpose
-TBD - created by archiving change define-breakout-strategy-system. Update Purpose after archive.
+Define local operational safety, degraded-mode protection, secret-handling, documentation, and deferred operator-surface requirements for the breakout strategy before any live or production execution scope is approved.
+
 ## Requirements
 ### Requirement: Monitoring and degraded mode protect trading
-The system SHALL provide healthchecks and alerts for market data feed gaps, broker disconnects, order mismatches, risk stops, configuration errors, and abnormal trading behavior.
+The system SHALL implement local health/degraded-mode checks that detect stale market data, configuration errors, fake broker/order mismatch, and risk-stop states, and SHALL block new entries while degraded.
 
-#### Scenario: Market data feed is lost
-- **WHEN** live market data becomes stale beyond configured tolerance
-- **THEN** the system enters degraded mode
-- **AND** no new trades are opened until data health recovers
-
-#### Scenario: Daily loss limit is reached
-- **WHEN** realized/unrealized loss reaches `max_daily_loss_pct` policy threshold
-- **THEN** Risk Manager blocks all new entries until the configured reset condition
+#### Scenario: Degraded mode blocks entries
+- **WHEN** any configured health check enters degraded state
+- **THEN** entry generation or risk approval rejects new entries with an explicit degraded reason
 
 ### Requirement: Restart and reconnect are safe
 The system SHALL synchronize broker orders and positions after restart or reconnect before permitting new entries.
@@ -48,15 +44,11 @@ The system SHALL document least-privilege API access, secret rotation, role sepa
 - **THEN** it includes secret handling, environment variables, permissions, network/TLS assumptions, backup/rollback, and incident contacts/checklists
 
 ### Requirement: Operator documentation is complete
-The system SHALL include user guide, operator guide, API specification, configuration manual, test methodology, test report, deployment guide, runbook, changelog/config changelog, and QA checklists.
+The repository SHALL include task-oriented local documentation for setup, configuration, dry-run operation, operator workflows, API/web surfaces, test methodology, runbook procedures, deployment assumptions, security handling, QA checklist, and config changelog expectations.
 
-#### Scenario: Operator handles feed gap
-- **WHEN** a feed-gap alert occurs
-- **THEN** the runbook explains how to inspect data health, trading mode, broker state, and recovery conditions
-
-#### Scenario: QA checklist is run
-- **WHEN** QA validates a release
-- **THEN** it checks feed loss, restart sync, duplicate data, invalid config, daily loss stop, false breakout handling, first fixation stop movement, and add-on risk rejection
+#### Scenario: Operator follows feed-gap runbook
+- **WHEN** a feed-gap alert or degraded state occurs
+- **THEN** the runbook explains how to inspect data health, trading mode, broker/fake adapter state, recovery conditions, and safe restart steps
 
 ### Requirement: Legal and broker constraints are configurable policy inputs
 The system SHALL allow project-specific broker, exchange, and jurisdictional constraints to be documented and enforced as policy where applicable.

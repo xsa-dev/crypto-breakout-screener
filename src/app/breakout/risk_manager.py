@@ -29,9 +29,13 @@ class RiskManager:
         if state.open_positions >= self.limits.max_open_positions:
             return self._reject(RiskRejectionReason.MAX_POSITIONS)
         if state.feed_degraded:
-            return self._reject(RiskRejectionReason.FEED_DEGRADED)
+            return self._reject(RiskRejectionReason.FEED_DEGRADED, state.degraded_reasons)
         if state.broker_state_mismatch:
-            return self._reject(RiskRejectionReason.BROKER_STATE_MISMATCH)
+            return self._reject(RiskRejectionReason.BROKER_STATE_MISMATCH, state.degraded_reasons)
+        if state.config_invalid:
+            return self._reject(RiskRejectionReason.CONFIG_INVALID, state.degraded_reasons)
+        if state.degraded_reasons:
+            return self._reject(RiskRejectionReason.HEALTH_DEGRADED, state.degraded_reasons)
 
         stop_distance = abs(intent.entry_price - intent.stop_price)
         if stop_distance <= self.limits.min_stop_distance:
@@ -85,5 +89,12 @@ class RiskManager:
             return max(0.0, new_average - old_average)
         return max(0.0, old_average - new_average)
 
-    def _reject(self, reason: RiskRejectionReason) -> RiskDecision:
-        return RiskDecision(approved=False, reason=reason)
+    def _reject(
+        self,
+        reason: RiskRejectionReason,
+        degraded_reasons: list[str] | None = None,
+    ) -> RiskDecision:
+        metadata: dict[str, str | int | float | bool | list[str]] = (
+            {"degraded_reasons": degraded_reasons} if degraded_reasons else {}
+        )
+        return RiskDecision(approved=False, reason=reason, metadata=metadata)
