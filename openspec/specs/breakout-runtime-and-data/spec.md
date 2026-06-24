@@ -1,24 +1,30 @@
 # breakout-runtime-and-data Specification
 
 ## Purpose
-TBD - created by archiving change define-breakout-strategy-system. Update Purpose after archive.
+Define the safe runtime modes, canonical market-data contracts, provider boundaries, normalization rules, and no-lookahead invariants used by the breakout strategy.
+
 ## Requirements
 ### Requirement: Operation modes are explicit and staged
-The system SHALL support `advisory-only`, `semi-auto`, and `full-auto` operation modes. The system SHALL allow historical backtest, paper trading, reduced-risk pilot, and production stages to be configured separately.
+The system SHALL implement typed local configuration for `advisory_only`, `semi_auto`, and `full_auto` operation modes while keeping live `full_auto` execution blocked by deferred-scope gates until a later approved execution change. The system SHALL allow historical backtest, paper trading, reduced-risk pilot, and production stages to be configured separately.
+
+#### Scenario: Baseline mode is safe
+- **WHEN** the baseline breakout configuration is loaded during this foundation slice
+- **THEN** the operation mode defaults to `semi_auto`
+- **AND** no broker order can be submitted by foundation components
 
 #### Scenario: Advisory-only mode
-- **WHEN** a breakout setup is detected in `advisory-only` mode
+- **WHEN** a breakout setup is detected in `advisory_only` mode
 - **THEN** the system records the signal and decision trace
 - **AND** the system does not submit broker orders
 
 #### Scenario: Semi-auto mode
-- **WHEN** a risk-approved trade intent is produced in `semi-auto` mode
+- **WHEN** a risk-approved trade intent is produced in `semi_auto` mode
 - **THEN** the system requires operator confirmation before execution
 
-#### Scenario: Full-auto mode
-- **WHEN** a risk-approved trade intent is produced in `full-auto` mode
-- **THEN** the system may submit orders through the configured execution adapter
-- **AND** the system records the automated execution decision
+#### Scenario: Full-auto mode remains gated
+- **WHEN** a risk-approved trade intent is produced in `full_auto` mode before the deferred execution change is approved
+- **THEN** the system rejects live broker execution through the deferred-scope gate
+- **AND** the system records the blocked automated execution decision
 
 ### Requirement: Market and timeframe scope is configurable
 The system SHALL support configurable symbols and markets including forex, crypto, futures, CFD, stocks, and equivalent broker/API instruments when valid data and execution adapters exist. The baseline strategy SHALL support M15 execution context and H1/H4/D1 higher-timeframe context.
@@ -33,7 +39,12 @@ The system SHALL support configurable symbols and markets including forex, crypt
 - **THEN** the system rejects that symbol with a configuration error before trading
 
 ### Requirement: Market data providers expose bars, ticks, and optional order book
-The system SHALL use a `MarketDataProvider` abstraction for historical bars, streaming/recent ticks, and optional order book or density data. Missing optional order book data SHALL NOT break core breakout detection but SHALL be reflected in density scoring.
+The system SHALL expose local provider protocols/interfaces for historical bars, recent or streaming ticks, and optional order-book/density data using canonical DTOs that can be implemented by fakes in tests before any live adapter is approved. Missing optional order book data SHALL NOT break core breakout detection but SHALL be reflected in density scoring.
+
+#### Scenario: Fake provider is sufficient for tests
+- **WHEN** foundation tests evaluate breakout levels or setup scores
+- **THEN** they can use an in-memory provider without network credentials
+- **AND** the provider returns canonical bars/ticks accepted by the normalizer
 
 #### Scenario: Bars are fetched
 - **WHEN** historical analysis or backtest requests bars
@@ -48,7 +59,11 @@ The system SHALL use a `MarketDataProvider` abstraction for historical bars, str
 - **THEN** the system records density as unavailable or uses an approved configured proxy
 
 ### Requirement: Data normalization prevents inconsistent inputs
-The normalizer SHALL convert timestamps to UTC, deduplicate repeated bars/ticks, validate ordering, resample only through configured rules, and mark data gaps.
+The normalizer SHALL implement UTC conversion, deterministic deduplication, ordering validation, configured resampling/gap marking, and metadata propagation for canonical bars and ticks.
+
+#### Scenario: Out-of-order input is normalized or rejected
+- **WHEN** provider data arrives out of timestamp order
+- **THEN** the normalizer emits deterministic ordered events or raises an explicit validation error according to configuration
 
 #### Scenario: Duplicate event received
 - **WHEN** a duplicate bar or tick arrives from a provider
@@ -60,7 +75,11 @@ The normalizer SHALL convert timestamps to UTC, deduplicate repeated bars/ticks,
 - **AND** live execution is blocked or degraded according to operations policy
 
 ### Requirement: No-lookahead invariant is enforced
-The system MUST NOT use future bars, future ticks, or unconfirmed right-window pivots when producing online signals, risk decisions, or live orders.
+The foundation implementation SHALL include tests proving online calculations do not use future bars, future ticks, or unconfirmed pivot right-window bars. The system MUST NOT use future bars, future ticks, or unconfirmed right-window pivots when producing online signals, risk decisions, or live orders.
+
+#### Scenario: Closed-bar-only signal calculation is tested
+- **WHEN** an online setup is evaluated at a historical bar
+- **THEN** tests verify only closed bars available at that timestamp are passed to level and setup calculations
 
 #### Scenario: Pivot requires right-window bars
 - **WHEN** a pivot candidate depends on `pivot_right_bars=3`
@@ -69,4 +88,3 @@ The system MUST NOT use future bars, future ticks, or unconfirmed right-window p
 #### Scenario: Backtest uses same online information boundary
 - **WHEN** a backtest evaluates a bar
 - **THEN** the strategy only sees data that would have been available at that historical time
-

@@ -76,6 +76,26 @@ class Normalizer:
             by_key[(bar["symbol"], bar["timeframe"], bar["ts"])] = bar
         return sorted(by_key.values(), key=lambda bar: (bar["symbol"], bar["timeframe"], bar["ts"]))
 
+    def deduplicate_ticks(self, ticks: list[Tick]) -> list[Tick]:
+        """Return ticks ordered by time with duplicates collapsed by symbol/timestamp."""
+
+        by_key: dict[tuple[str, datetime], Tick] = {}
+        for tick in ticks:
+            by_key[(tick["symbol"], tick["ts"])] = tick
+        return sorted(by_key.values(), key=lambda tick: (tick["symbol"], tick["ts"]))
+
+    def validate_bar_order(self, bars: list[Bar]) -> None:
+        """Raise when bars for the same symbol/timeframe are not monotonic by timestamp."""
+
+        previous_by_stream: dict[tuple[str, str], datetime] = {}
+        for bar in bars:
+            key = (bar["symbol"], bar["timeframe"])
+            previous = previous_by_stream.get(key)
+            if previous is not None and bar["ts"] < previous:
+                msg = f"bars for {key[0]} {key[1]} are out of order at {bar['ts'].isoformat()}"
+                raise ValueError(msg)
+            previous_by_stream[key] = bar["ts"]
+
     def detect_bar_gaps(self, bars: list[Bar], *, expected_seconds: int | None = None) -> list[FeedGap]:
         """Detect timestamp gaps in a canonical bar stream."""
 

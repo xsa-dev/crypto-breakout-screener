@@ -1,10 +1,11 @@
 # breakout-setup-scoring Specification
 
 ## Purpose
-TBD - created by archiving change define-breakout-strategy-system. Update Purpose after archive.
+Specify deterministic breakout setup feature calculation, score eligibility thresholds, scenario priority, and context-filter behavior.
+
 ## Requirements
 ### Requirement: Setup evaluator calculates required factors
-The system SHALL calculate setup factors for consolidation, slow approach, trend, volume/activity, and density/support before selecting a breakout scenario.
+The setup scorer SHALL calculate ATR, EMA50/EMA200, ADX where available, consolidation/protorgovka, slow approach, activity, and density/proxy feature values from canonical data before selecting a breakout scenario.
 
 #### Scenario: Consolidation factor is scored
 - **WHEN** price range compresses, ATR falls, or variance decreases over `consolidation_bars`
@@ -22,12 +23,21 @@ The system SHALL calculate setup factors for consolidation, slow approach, trend
 - **WHEN** volume, tick activity, or configured proxy rises during compression or breakout
 - **THEN** the system assigns an activity score from 0 to the configured weight
 
+#### Scenario: Missing optional density data is handled
+- **WHEN** no order-book/density source is configured
+- **THEN** setup scoring records density as unavailable or uses an approved proxy
+- **AND** the missing optional feature does not crash core setup evaluation
+
 #### Scenario: Density factor is scored
 - **WHEN** order book density or an approved proxy supports the breakout direction
 - **THEN** the system assigns a density/support score from 0 to the configured weight
 
 ### Requirement: Breakout score controls trade eligibility
-The system SHALL compute `breakout_score` as the sum of configured factor scores. Baseline thresholds SHALL be `score >= 70` for normal risk, `50 <= score < 70` for reduced risk, and `score < 50` for no trade.
+The setup scorer SHALL implement configured factor weights, 70/50 thresholds, and explicit low-score rejection reasons. The system SHALL compute `breakout_score` as the sum of configured factor scores. Baseline thresholds SHALL be `score >= 70` for normal risk, `50 <= score < 70` for reduced risk, and `score < 50` for no trade.
+
+#### Scenario: Score class is explicit
+- **WHEN** a setup is scored
+- **THEN** the result exposes numeric factor scores, configured weights, total score, threshold class, selected scenario if any, and rejection reasons if blocked
 
 #### Scenario: Normal-risk score
 - **WHEN** `breakout_score` is 70 or higher
@@ -42,7 +52,11 @@ The system SHALL compute `breakout_score` as the sum of configured factor scores
 - **THEN** the system rejects the setup before order intent generation
 
 ### Requirement: Scenario selection is deterministic
-The system SHALL choose at most one primary scenario per level/setup using the configured priority order: consolidation breakout, cascade-level breakout, local-extremum breakout near the level, trendline/naklonnaya breakout, density-supported breakout.
+The setup scorer SHALL implement and choose at most one primary scenario per level/setup using the configured priority order: consolidation breakout, cascade-level breakout, local-extremum breakout near the level, trendline/naklonnaya breakout, density-supported breakout.
+
+#### Scenario: Priority order is explicit
+- **WHEN** multiple setup scenarios match
+- **THEN** the scorer chooses the configured highest-priority primary scenario
 
 #### Scenario: Multiple scenarios match
 - **WHEN** consolidation and density-supported breakout conditions are both true
@@ -55,4 +69,3 @@ The system SHALL apply configured market-direction and “поводырь” co
 #### Scenario: Context sharply opposes breakout
 - **WHEN** a configured context driver strongly moves against the breakout direction
 - **THEN** the system lowers score or rejects the setup according to configuration
-

@@ -123,6 +123,7 @@ class Level(BaseModel):
     touches: int = Field(default=1, ge=1)
     created_at: datetime
     source_indexes: list[int] = Field(default_factory=list)
+    metadata: dict[str, float | int | str | bool] = Field(default_factory=dict)
     invalidated_at: datetime | None = None
     invalidation_reason: str | None = None
 
@@ -156,3 +157,4 @@ class BreakoutScore(BaseModel):
     activity: int = Field(ge=0, le=100)
     density: int = Field(ge=0, le=100)
     eligibility: Literal["normal", "reduced", "blocked"]
+    rejection_reasons: list[str] = Field(default_factory=list)

@@ -81,12 +81,92 @@ class LevelEngine:
             levels.append(self._make_level(bar, LevelType.DAILY_LOW, bar["low"], index))
         return levels
 
+    def detect_cascade_levels(self, levels: list[Level], *, atr: float) -> list[Level]:
+        """Detect compact level sequences that form cascade structures."""
+
+        if atr <= 0:
+            msg = "atr must be positive"
+            raise ValueError(msg)
+
+        ordered = sorted(levels, key=lambda level: level.price)
+        max_gap = self.config.cascade_gap_atr * atr
+        cascades: list[Level] = []
+        window: list[Level] = []
+        for level in ordered:
+            if not window or level.price - window[-1].price <= max_gap:
+                window.append(level)
+            else:
+                cascades.extend(self._cascade_from_window(window))
+                window = [level]
+        cascades.extend(self._cascade_from_window(window))
+        return cascades
+
+    def detect_trendline_levels(self, touch_levels: list[Level], *, tolerance_atr: float, atr: float) -> list[Level]:
+        """Detect simple auditable trendline levels from at least three aligned touches."""
+
+        if atr <= 0:
+            msg = "atr must be positive"
+            raise ValueError(msg)
+        if len(touch_levels) < 3:
+            return []
+
+        ordered = sorted(touch_levels, key=lambda level: level.created_at)
+        first, last = ordered[0], ordered[-1]
+        span = max((last.created_at - first.created_at).total_seconds(), 1.0)
+        slope = (last.price - first.price) / span
+        tolerance = tolerance_atr * atr
+        aligned: list[Level] = []
+        for level in ordered:
+            elapsed = (level.created_at - first.created_at).total_seconds()
+            expected = first.price + slope * elapsed
+            if abs(level.price - expected) <= tolerance:
+                aligned.append(level)
+        if len(aligned) < 3:
+            return []
+
+        source = aligned[-1]
+        return [
+            Level(
+                level_id=_level_id(
+                    source.symbol,
+                    LevelType.TRENDLINE,
+                    source.timeframe.value,
+                    source.price,
+                    len(aligned),
+                ),
+                symbol=source.symbol,
+                type=LevelType.TRENDLINE,
+                price=source.price,
+                timeframe=source.timeframe,
+                touches=len(aligned),
+                created_at=source.created_at,
+                source_indexes=[index for level in aligned for index in level.source_indexes],
+                metadata={"slope_per_second": slope, "touches": len(aligned)},
+            )
+        ]
+
     def validate_min_touches(self, level: Level, touches: int) -> Level | None:
         """Return a level updated with touches when it meets minimum touch rules."""
 
         if touches < self.config.min_touches:
             return None
         return level.model_copy(update={"touches": touches})
+
+    def validate_level(self, level: Level, bars: list[Bar], *, atr: float) -> Level:
+        """Apply reaction and recent-break validity rules to a level."""
+
+        if atr <= 0:
+            msg = "atr must be positive"
+            raise ValueError(msg)
+        lookback = bars[-self.config.recent_break_lookback_bars :]
+        if self._recently_broken(level, lookback):
+            invalidated_at = lookback[-1]["ts"] if lookback else level.created_at
+            return level.model_copy(
+                update={"invalidated_at": invalidated_at, "invalidation_reason": "recent_break"}
+            )
+        if not self._has_reaction(level, bars, atr=atr):
+            return level.model_copy(update={"invalidation_reason": "reaction_too_small"})
+        return level
 
     def _make_level(self, bar: Bar, level_type: LevelType, price: float, index: int) -> Level:
         timeframe = TimeFrame(bar["timeframe"])
@@ -101,3 +181,46 @@ class LevelEngine:
             created_at=created_at,
             source_indexes=[index],
         )
+
+    def _cascade_from_window(self, window: list[Level]) -> list[Level]:
+        if len(window) < self.config.cascade_min_count:
+            return []
+        source = window[-1]
+        return [
+            Level(
+                level_id=_level_id(
+                    source.symbol,
+                    LevelType.CASCADE,
+                    source.timeframe.value,
+                    source.price,
+                    len(window),
+                ),
+                symbol=source.symbol,
+                type=LevelType.CASCADE,
+                price=source.price,
+                timeframe=source.timeframe,
+                touches=sum(level.touches for level in window),
+                created_at=source.created_at,
+                source_indexes=[index for level in window for index in level.source_indexes],
+                metadata={"component_count": len(window)},
+            )
+        ]
+
+    def _recently_broken(self, level: Level, bars: list[Bar]) -> bool:
+        tolerance = self.config.touch_tolerance_atr
+        if level.type in {LevelType.PIVOT_HIGH, LevelType.DAILY_HIGH, LevelType.ROUND_NUMBER}:
+            return any(bar["close"] > level.price + tolerance for bar in bars)
+        if level.type in {LevelType.PIVOT_LOW, LevelType.DAILY_LOW}:
+            return any(bar["close"] < level.price - tolerance for bar in bars)
+        return False
+
+    def _has_reaction(self, level: Level, bars: list[Bar], *, atr: float) -> bool:
+        if not bars:
+            return False
+        threshold = self.config.min_reaction_atr * atr
+        for bar in bars:
+            if bar["low"] <= level.price <= bar["high"]:
+                reaction = max(abs(bar["high"] - level.price), abs(level.price - bar["low"]))
+                if reaction >= threshold:
+                    return True
+        return False
