@@ -28,7 +28,7 @@ gitlab_project_url() {
 
 log_gitlab_preflight() {
   remote_url="$(git -C "$REPO_ROOT" remote get-url origin 2>/dev/null || true)"
-  project_url="$(gitlab_project_url)"
+  project_url="$(gitlab_project_url || true)"
 
   {
     printf "[%s] GitLab local-only preflight\n" "$(date "+%Y-%m-%dT%H:%M:%S%z")"
