@@ -356,6 +356,32 @@ def test_risk_manager_sizes_entries_and_blocks_bad_addons() -> None:
     assert degrading_addon.reason is RiskRejectionReason.ADDON_DEGRADES_AVERAGE
 
 
+def test_risk_manager_reports_multiplier_aware_planned_risk_for_entries() -> None:
+    manager = RiskManager(
+        RiskLimits(
+            equity=10_000.0,
+            risk_pct=0.01,
+            contract_multiplier=10.0,
+        )
+    )
+    entry = TradeIntent(
+        intent_id="entry-multiplier",
+        symbol="XAUUSD",
+        side=Side.LONG,
+        mode=EntryMode.POST_BREAKOUT,
+        entry_price=100.0,
+        stop_price=98.0,
+        quantity=100.0,
+        score=score(),
+    )
+
+    approved_entry = manager.evaluate(entry, RiskState())
+
+    assert approved_entry.approved is True
+    assert approved_entry.quantity == pytest.approx(5.0)
+    assert approved_entry.planned_risk == pytest.approx(100.0)
+
+
 def test_fake_execution_adapter_is_idempotent_and_reconciles_local_state() -> None:
     adapter = FakeExecutionAdapter()
     request = ExecutionRequest(

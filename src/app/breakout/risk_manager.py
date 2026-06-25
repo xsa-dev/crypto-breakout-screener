@@ -50,7 +50,11 @@ class RiskManager:
 
         max_risk = self.limits.equity * self.limits.risk_pct
         quantity = min(intent.quantity, max_risk / (stop_distance * self.limits.contract_multiplier))
-        return RiskDecision(approved=True, quantity=quantity, planned_risk=quantity * stop_distance)
+        return RiskDecision(
+            approved=True,
+            quantity=quantity,
+            planned_risk=quantity * stop_distance * self.limits.contract_multiplier,
+        )
 
     def _evaluate_addon(
         self,
