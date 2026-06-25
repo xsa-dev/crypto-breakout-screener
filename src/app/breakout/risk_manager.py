@@ -2,6 +2,7 @@
 
 from src.core.enums import RiskRejectionReason, Side
 from src.core.models import (
+    AddonRollbackDecision,
     DensityInvalidationDecision,
     DensitySupportPlan,
     PositionState,
@@ -123,6 +124,55 @@ class RiskManager:
                 "stop_price": plan.stop_price,
                 "stop_placement_rule": plan.stop_placement_rule,
             },
+        )
+
+    def evaluate_addon_rollback(
+        self,
+        *,
+        position: PositionState,
+        addon_quantity: float,
+        addon_level: float,
+        current_price: float,
+        tolerance: float = 0.0,
+    ) -> AddonRollbackDecision:
+        """Return a side-symmetric local reduction decision after add-on rollback."""
+
+        if addon_quantity <= 0:
+            msg = "addon_quantity must be positive"
+            raise ValueError(msg)
+        if tolerance < 0:
+            msg = "tolerance must be non-negative"
+            raise ValueError(msg)
+
+        if position.side is Side.LONG:
+            rolled_back = current_price <= addon_level + tolerance
+        else:
+            rolled_back = current_price >= addon_level - tolerance
+
+        metadata: dict[str, float | int | str | bool] = {
+            "addon_level": addon_level,
+            "current_price": current_price,
+            "position_quantity": position.quantity,
+            "addon_quantity": addon_quantity,
+            "tolerance": tolerance,
+            "side": position.side.value,
+        }
+        if not rolled_back:
+            return AddonRollbackDecision(
+                action="hold",
+                reason="addon_level_intact",
+                affected_quantity=0.0,
+                remaining_base_quantity=position.quantity,
+                metadata=metadata,
+            )
+
+        affected_quantity = min(addon_quantity, position.quantity)
+        return AddonRollbackDecision(
+            action="reduce_added_quantity",
+            reason="addon_level_rollback",
+            affected_quantity=affected_quantity,
+            remaining_base_quantity=max(0.0, position.quantity - affected_quantity),
+            metadata=metadata,
         )
 
     def _evaluate_addon(

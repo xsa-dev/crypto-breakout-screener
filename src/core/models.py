@@ -251,6 +251,16 @@ class DensityInvalidationDecision(BaseModel):
     metadata: dict[str, float | int | str | bool] = Field(default_factory=dict)
 
 
+class AddonRollbackDecision(BaseModel):
+    """Local add-on rollback/reset decision with no broker side effects."""
+
+    action: Literal["hold", "reduce_added_quantity"]
+    reason: Literal["addon_level_intact", "addon_level_rollback"]
+    affected_quantity: float = Field(ge=0)
+    remaining_base_quantity: float = Field(ge=0)
+    metadata: dict[str, float | int | str | bool] = Field(default_factory=dict)
+
+
 class RiskLimits(BaseModel):
     """Configurable local risk limits for deterministic approval tests."""
 

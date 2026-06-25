@@ -28,7 +28,7 @@ The system SHALL calculate position size using configured risk, equity, stop dis
 - **THEN** Risk Manager rejects the trade intent
 
 ### Requirement: Add-ons are risk-budgeted
-The system SHALL allow add-ons only on new local-extremum breakouts, cascade-level breakouts, or valid retests. Add-ons SHALL be 10%-20% of position by default, no more than two, and SHALL NOT exceed remaining trade risk budget or degrade average price beyond configured limits.
+The system SHALL allow add-ons only on new local-extremum breakouts, cascade-level breakouts, or valid retests. Add-ons SHALL be 10%-20% of position by default, no more than two, and SHALL NOT exceed remaining trade risk budget or degrade average price beyond configured limits. When price rolls back to an add-on level, local risk logic SHALL produce a deterministic broker-neutral reset/reduction decision with a machine-readable reason and remaining base position state.
 
 #### Scenario: Add-on is approved
 - **WHEN** a valid add-on trigger occurs and remaining risk budget is sufficient
@@ -41,7 +41,12 @@ The system SHALL allow add-ons only on new local-extremum breakouts, cascade-lev
 #### Scenario: Price rolls back to add-on level
 - **WHEN** price rolls back to the add-on level after an add-on
 - **THEN** the system exits or reduces the added portion according to configured rules
-- **AND** the decision trace records the add-on reset reason and remaining base position state
+- **AND** the decision trace records `addon_level_rollback` and remaining base position state
+
+#### Scenario: Price holds away from add-on level
+- **WHEN** price remains away from the add-on level after an add-on
+- **THEN** the system holds the added portion
+- **AND** the decision trace records `addon_level_intact`
 
 ### Requirement: Density can define support and stop behavior
 The system SHALL allow configured density/support to act as a trade-support premise and stop reference. When density is used as the support premise, local planning SHALL record the density reference, stop placement rule, and exit-on-density-eating rule. Density invalidation/eating against the trade SHALL produce a deterministic local reset/reduction decision with a machine-readable reason and remaining base position state.

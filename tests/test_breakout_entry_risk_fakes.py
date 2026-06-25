@@ -470,6 +470,66 @@ def test_density_eating_invalidation_records_reset_reason_and_remaining_base_sta
     assert invalidated.metadata["stop_price"] == pytest.approx(99.25)
 
 
+def test_addon_rollback_reduces_added_quantity_with_trace_metadata() -> None:
+    manager = RiskManager()
+    long_position = PositionState(symbol="XAUUSD", side=Side.LONG, quantity=12.0, average_price=100.5)
+    short_position = PositionState(symbol="XAUUSD", side=Side.SHORT, quantity=8.0, average_price=100.5)
+
+    long_decision = manager.evaluate_addon_rollback(
+        position=long_position,
+        addon_quantity=2.0,
+        addon_level=101.0,
+        current_price=101.02,
+        tolerance=0.05,
+    )
+    short_decision = manager.evaluate_addon_rollback(
+        position=short_position,
+        addon_quantity=2.0,
+        addon_level=99.0,
+        current_price=98.98,
+        tolerance=0.05,
+    )
+
+    assert long_decision.action == "reduce_added_quantity"
+    assert long_decision.reason == "addon_level_rollback"
+    assert long_decision.affected_quantity == pytest.approx(2.0)
+    assert long_decision.remaining_base_quantity == pytest.approx(10.0)
+    assert long_decision.metadata["addon_level"] == pytest.approx(101.0)
+    assert short_decision.action == "reduce_added_quantity"
+    assert short_decision.remaining_base_quantity == pytest.approx(6.0)
+
+
+def test_addon_rollback_holds_when_price_remains_away_from_addon_level() -> None:
+    manager = RiskManager()
+    position = PositionState(symbol="XAUUSD", side=Side.LONG, quantity=12.0, average_price=100.5)
+
+    decision = manager.evaluate_addon_rollback(
+        position=position,
+        addon_quantity=2.0,
+        addon_level=101.0,
+        current_price=102.0,
+        tolerance=0.05,
+    )
+
+    assert decision.action == "hold"
+    assert decision.reason == "addon_level_intact"
+    assert decision.affected_quantity == 0.0
+    assert decision.remaining_base_quantity == pytest.approx(12.0)
+
+
+def test_addon_rollback_rejects_invalid_quantity() -> None:
+    manager = RiskManager()
+    position = PositionState(symbol="XAUUSD", side=Side.LONG, quantity=12.0, average_price=100.5)
+
+    with pytest.raises(ValueError, match="addon_quantity must be positive"):
+        manager.evaluate_addon_rollback(
+            position=position,
+            addon_quantity=0.0,
+            addon_level=101.0,
+            current_price=101.0,
+        )
+
+
 def test_fake_execution_adapter_is_idempotent_and_reconciles_local_state() -> None:
     adapter = FakeExecutionAdapter()
     request = ExecutionRequest(
