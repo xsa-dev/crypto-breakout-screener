@@ -6,6 +6,7 @@ from src.core.enums import EntryMode, FsmState, Side
 from src.core.models import (
     BreakoutScore,
     BreakoutStrategyConfig,
+    ExitPlan,
     LifecycleTransition,
     MarketSnapshot,
     TradeIntent,
@@ -138,7 +139,8 @@ class EntryEngine:
 class LifecycleEngine:
     """Required finite state machine with auditable transition reasons."""
 
-    def __init__(self) -> None:
+    def __init__(self, config: BreakoutStrategyConfig | None = None) -> None:
+        self.config = config or BreakoutStrategyConfig()
         self.state = FsmState.LEVEL_SEARCH
         self.history: list[LifecycleTransition] = []
 
@@ -209,6 +211,35 @@ class LifecycleEngine:
             "second_fixation": total_quantity * 0.50,
             "runner": total_quantity * 0.20,
         }
+
+    def plan_exit_framework(
+        self,
+        *,
+        total_quantity: float,
+        side: Side,
+        low_breakout: bool,
+    ) -> ExitPlan:
+        """Plan baseline or accelerated low-breakout exits without live side effects."""
+
+        if (
+            total_quantity > 0
+            and self.config.fast_exit_for_low_breakouts
+            and side is Side.SHORT
+            and low_breakout
+        ):
+            return ExitPlan(
+                fast_exit=True,
+                reason="fast_exit_low_breakout",
+                quantities={
+                    "first_fixation": total_quantity * 0.50,
+                    "second_fixation": total_quantity * 0.50,
+                    "runner": 0.0,
+                },
+            )
+        return ExitPlan(
+            reason="baseline_exit_framework",
+            quantities=self.partial_exit_quantities(total_quantity),
+        )
 
     def move_stop_after_first_fixation(
         self,

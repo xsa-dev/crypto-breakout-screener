@@ -143,6 +143,65 @@ def test_setup_invalidation_resets_to_level_search_with_reason() -> None:
     assert lifecycle.history[-1].reason == "recent_break"
 
 
+def test_fast_exit_low_breakout_short_uses_accelerated_no_runner_plan() -> None:
+    lifecycle = LifecycleEngine(BreakoutStrategyConfig(fast_exit_for_low_breakouts=True))
+
+    plan = lifecycle.plan_exit_framework(
+        total_quantity=10.0,
+        side=Side.SHORT,
+        low_breakout=True,
+    )
+
+    assert plan.fast_exit is True
+    assert plan.reason == "fast_exit_low_breakout"
+    assert plan.quantities == pytest.approx(
+        {"first_fixation": 5.0, "second_fixation": 5.0, "runner": 0.0}
+    )
+
+
+def test_fast_exit_falls_back_to_baseline_when_disabled_or_not_low_breakout_short() -> None:
+    disabled = LifecycleEngine(BreakoutStrategyConfig(fast_exit_for_low_breakouts=False))
+    enabled = LifecycleEngine(BreakoutStrategyConfig(fast_exit_for_low_breakouts=True))
+
+    disabled_plan = disabled.plan_exit_framework(
+        total_quantity=10.0,
+        side=Side.SHORT,
+        low_breakout=True,
+    )
+    long_plan = enabled.plan_exit_framework(
+        total_quantity=10.0,
+        side=Side.LONG,
+        low_breakout=True,
+    )
+    non_low_plan = enabled.plan_exit_framework(
+        total_quantity=10.0,
+        side=Side.SHORT,
+        low_breakout=False,
+    )
+
+    assert disabled_plan.fast_exit is False
+    assert disabled_plan.reason == "baseline_exit_framework"
+    assert disabled_plan.quantities == pytest.approx(
+        {"first_fixation": 3.0, "second_fixation": 5.0, "runner": 2.0}
+    )
+    assert long_plan.fast_exit is False
+    assert non_low_plan.fast_exit is False
+
+
+def test_fast_exit_requires_positive_quantity() -> None:
+    lifecycle = LifecycleEngine(BreakoutStrategyConfig(fast_exit_for_low_breakouts=True))
+
+    plan = lifecycle.plan_exit_framework(
+        total_quantity=0.0,
+        side=Side.SHORT,
+        low_breakout=True,
+    )
+
+    assert plan.fast_exit is False
+    assert plan.reason == "baseline_exit_framework"
+    assert plan.quantities == {"first_fixation": 0.0, "second_fixation": 0.0, "runner": 0.0}
+
+
 def test_risk_manager_blocks_daily_loss_max_positions_feed_broker_and_invalid_stop() -> None:
     manager = RiskManager(RiskLimits(max_daily_loss=500.0, max_open_positions=1))
     intent = TradeIntent(

@@ -138,6 +138,7 @@ class BreakoutStrategyConfig(BaseModel):
     context_filter: ContextFilterConfig = Field(default_factory=ContextFilterConfig)
     score: ScoreConfig = Field(default_factory=ScoreConfig)
     entries: EntryConfig = Field(default_factory=EntryConfig)
+    fast_exit_for_low_breakouts: bool = False
 
     @model_validator(mode="after")
     def validate_full_auto_guard(self) -> "BreakoutStrategyConfig":
@@ -337,6 +338,14 @@ class LifecycleTransition(BaseModel):
     to_state: FsmState
     reason: str
     timestamp: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
+
+
+class ExitPlan(BaseModel):
+    """Deterministic local exit framework for a planned position."""
+
+    fast_exit: bool = False
+    reason: str
+    quantities: dict[str, float]
 
 
 class BacktestCostModel(BaseModel):
