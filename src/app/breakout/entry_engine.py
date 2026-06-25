@@ -30,6 +30,7 @@ class EntryEngine:
         market: MarketSnapshot,
         pre_entry_ready: bool = False,
         at_level_ready: bool = False,
+        lower_protorgovka_ready: bool = False,
     ) -> list[TradeIntent]:
         """Generate entry intents capped by configured base-position shares."""
 
@@ -37,6 +38,25 @@ class EntryEngine:
             return []
 
         intents: list[TradeIntent] = []
+        if (
+            lower_protorgovka_ready
+            and self.config.entries.lower_protorgovka_entry_enabled
+            and side is Side.LONG
+        ):
+            intents.append(
+                self._intent(
+                    mode=EntryMode.PRE_ENTRY,
+                    share=self.config.entries.pre_entry_share,
+                    score=score,
+                    side=side,
+                    level_price=level_price,
+                    base_quantity=base_quantity,
+                    entry_price=market.price,
+                    stop_price=stop_price,
+                    reason="lower_protorgovka_ready",
+                    entry_subtype="lower_protorgovka_boundary",
+                )
+            )
         if pre_entry_ready:
             intents.append(
                 self._intent(
@@ -111,7 +131,15 @@ class EntryEngine:
         entry_price: float,
         stop_price: float,
         reason: str,
+        entry_subtype: str | None = None,
     ) -> TradeIntent:
+        metadata: dict[str, float | int | str | bool] = {
+            "share": share,
+            "level_price": level_price,
+            "reason": reason,
+        }
+        if entry_subtype is not None:
+            metadata["entry_subtype"] = entry_subtype
         return TradeIntent(
             intent_id=f"{score.symbol}:{mode.value}:{len(reason)}",
             symbol=score.symbol,
@@ -121,7 +149,7 @@ class EntryEngine:
             stop_price=stop_price,
             quantity=base_quantity * share,
             score=score,
-            metadata={"share": share, "level_price": level_price, "reason": reason},
+            metadata=metadata,
         )
 
     def _cap_total_quantity(self, intents: list[TradeIntent], base_quantity: float) -> list[TradeIntent]:

@@ -9,6 +9,7 @@ from src.core.enums import EntryMode, FsmState, RiskRejectionReason, ScenarioTyp
 from src.core.models import (
     BreakoutScore,
     BreakoutStrategyConfig,
+    EntryConfig,
     ExecutionRequest,
     MarketSnapshot,
     PositionState,
@@ -77,6 +78,90 @@ def test_entry_intents_use_default_share_caps_and_never_exceed_base_position() -
     ]
     assert [intent.quantity for intent in intents] == pytest.approx([3.0, 3.0, 4.0])
     assert sum(intent.quantity for intent in intents) == pytest.approx(10.0)
+
+
+def test_lower_protorgovka_entry_requires_explicit_flag_and_records_subtype() -> None:
+    engine = EntryEngine(
+        BreakoutStrategyConfig(
+            entries=EntryConfig(lower_protorgovka_entry_enabled=True),
+        )
+    )
+
+    intents = engine.generate_intents(
+        score=score(),
+        side=Side.LONG,
+        level_price=100.0,
+        base_quantity=10.0,
+        stop_price=98.0,
+        market=snapshot(price=99.4, close=99.5),
+        lower_protorgovka_ready=True,
+    )
+
+    assert len(intents) == 1
+    assert intents[0].mode is EntryMode.PRE_ENTRY
+    assert intents[0].quantity == pytest.approx(3.0)
+    assert intents[0].metadata["reason"] == "lower_protorgovka_ready"
+    assert intents[0].metadata["entry_subtype"] == "lower_protorgovka_boundary"
+
+
+def test_lower_protorgovka_entry_falls_back_when_disabled_not_ready_or_short() -> None:
+    disabled = EntryEngine(BreakoutStrategyConfig())
+    enabled = EntryEngine(
+        BreakoutStrategyConfig(entries=EntryConfig(lower_protorgovka_entry_enabled=True))
+    )
+
+    disabled_intents = disabled.generate_intents(
+        score=score(),
+        side=Side.LONG,
+        level_price=100.0,
+        base_quantity=10.0,
+        stop_price=98.0,
+        market=snapshot(price=99.4, close=99.5),
+        lower_protorgovka_ready=True,
+    )
+    not_ready_intents = enabled.generate_intents(
+        score=score(),
+        side=Side.LONG,
+        level_price=100.0,
+        base_quantity=10.0,
+        stop_price=98.0,
+        market=snapshot(price=99.4, close=99.5),
+        lower_protorgovka_ready=False,
+    )
+    short_intents = enabled.generate_intents(
+        score=score(),
+        side=Side.SHORT,
+        level_price=100.0,
+        base_quantity=10.0,
+        stop_price=102.0,
+        market=snapshot(price=100.0, close=100.0),
+        lower_protorgovka_ready=True,
+    )
+    blocked_intents = enabled.generate_intents(
+        score=score(total=40),
+        side=Side.LONG,
+        level_price=100.0,
+        base_quantity=10.0,
+        stop_price=98.0,
+        market=snapshot(price=99.4, close=99.5),
+        lower_protorgovka_ready=True,
+    )
+
+    zero_quantity_intents = enabled.generate_intents(
+        score=score(),
+        side=Side.LONG,
+        level_price=100.0,
+        base_quantity=0.0,
+        stop_price=98.0,
+        market=snapshot(price=99.4, close=99.5),
+        lower_protorgovka_ready=True,
+    )
+
+    assert disabled_intents == []
+    assert not_ready_intents == []
+    assert short_intents == []
+    assert blocked_intents == []
+    assert zero_quantity_intents == []
 
 
 def test_lifecycle_records_ordered_transitions_false_breakout_and_partial_exit() -> None:
