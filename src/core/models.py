@@ -227,6 +227,30 @@ class TradeIntent(BaseModel):
     metadata: dict[str, float | int | str | bool] = Field(default_factory=dict)
 
 
+class DensitySupportPlan(BaseModel):
+    """Deterministic local plan for density-backed trade support."""
+
+    symbol: str
+    side: Side
+    density_reference: float
+    stop_price: float
+    affected_quantity: float = Field(gt=0)
+    remaining_base_quantity: float = Field(ge=0)
+    stop_placement_rule: str = "behind_density"
+    exit_on_density_eating_rule: Literal["reduce_affected_quantity"] = "reduce_affected_quantity"
+    metadata: dict[str, float | int | str | bool] = Field(default_factory=dict)
+
+
+class DensityInvalidationDecision(BaseModel):
+    """Local density invalidation/reset decision with no broker side effects."""
+
+    action: Literal["hold", "reduce_affected_quantity"]
+    reason: Literal["density_still_valid", "density_eaten"]
+    affected_quantity: float = Field(ge=0)
+    remaining_base_quantity: float = Field(ge=0)
+    metadata: dict[str, float | int | str | bool] = Field(default_factory=dict)
+
+
 class RiskLimits(BaseModel):
     """Configurable local risk limits for deterministic approval tests."""
 
@@ -241,6 +265,7 @@ class RiskLimits(BaseModel):
     addon_max_share: float = Field(default=0.20, gt=0, lt=1)
     max_addons: int = Field(default=2, ge=0)
     degrade_avg_price_limit_atr: float = Field(default=1.0, ge=0)
+    density_stop_buffer: float = Field(default=0.0, ge=0)
 
 
 class RiskState(BaseModel):

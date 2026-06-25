@@ -1,7 +1,15 @@
 """Blocking risk manager for broker-neutral breakout intents."""
 
 from src.core.enums import RiskRejectionReason, Side
-from src.core.models import PositionState, RiskDecision, RiskLimits, RiskState, TradeIntent
+from src.core.models import (
+    DensityInvalidationDecision,
+    DensitySupportPlan,
+    PositionState,
+    RiskDecision,
+    RiskLimits,
+    RiskState,
+    TradeIntent,
+)
 
 
 class RiskManager:
@@ -54,6 +62,67 @@ class RiskManager:
             approved=True,
             quantity=quantity,
             planned_risk=quantity * stop_distance * self.limits.contract_multiplier,
+        )
+
+    def plan_density_support(
+        self,
+        *,
+        symbol: str,
+        side: Side,
+        density_reference: float,
+        affected_quantity: float,
+        base_position: PositionState,
+    ) -> DensitySupportPlan:
+        """Plan side-symmetric density-backed support and stop behavior locally."""
+
+        if side is Side.LONG:
+            stop_price = density_reference - self.limits.density_stop_buffer
+        else:
+            stop_price = density_reference + self.limits.density_stop_buffer
+        remaining_base_quantity = max(0.0, base_position.quantity - affected_quantity)
+        return DensitySupportPlan(
+            symbol=symbol,
+            side=side,
+            density_reference=density_reference,
+            stop_price=stop_price,
+            affected_quantity=affected_quantity,
+            remaining_base_quantity=remaining_base_quantity,
+            metadata={
+                "density_reference": density_reference,
+                "base_quantity": base_position.quantity,
+                "base_average_price": base_position.average_price,
+            },
+        )
+
+    def evaluate_density_invalidation(
+        self,
+        plan: DensitySupportPlan,
+        *,
+        density_eaten: bool,
+    ) -> DensityInvalidationDecision:
+        """Return a deterministic local decision when density support is eaten."""
+
+        if not density_eaten:
+            return DensityInvalidationDecision(
+                action="hold",
+                reason="density_still_valid",
+                affected_quantity=0.0,
+                remaining_base_quantity=plan.remaining_base_quantity + plan.affected_quantity,
+                metadata={
+                    "density_reference": plan.density_reference,
+                    "stop_price": plan.stop_price,
+                },
+            )
+        return DensityInvalidationDecision(
+            action=plan.exit_on_density_eating_rule,
+            reason="density_eaten",
+            affected_quantity=plan.affected_quantity,
+            remaining_base_quantity=plan.remaining_base_quantity,
+            metadata={
+                "density_reference": plan.density_reference,
+                "stop_price": plan.stop_price,
+                "stop_placement_rule": plan.stop_placement_rule,
+            },
         )
 
     def _evaluate_addon(

@@ -382,6 +382,60 @@ def test_risk_manager_reports_multiplier_aware_planned_risk_for_entries() -> Non
     assert approved_entry.planned_risk == pytest.approx(100.0)
 
 
+def test_density_support_plan_records_side_symmetric_stop_and_exit_policy() -> None:
+    manager = RiskManager(RiskLimits(density_stop_buffer=0.25))
+    position = PositionState(symbol="XAUUSD", side=Side.LONG, quantity=10.0, average_price=100.0)
+
+    long_plan = manager.plan_density_support(
+        symbol="XAUUSD",
+        side=Side.LONG,
+        density_reference=99.5,
+        affected_quantity=3.0,
+        base_position=position,
+    )
+    short_plan = manager.plan_density_support(
+        symbol="XAUUSD",
+        side=Side.SHORT,
+        density_reference=100.5,
+        affected_quantity=2.0,
+        base_position=position.model_copy(update={"side": Side.SHORT}),
+    )
+
+    assert long_plan.stop_price == pytest.approx(99.25)
+    assert short_plan.stop_price == pytest.approx(100.75)
+    assert long_plan.stop_placement_rule == "behind_density"
+    assert long_plan.exit_on_density_eating_rule == "reduce_affected_quantity"
+    assert long_plan.remaining_base_quantity == pytest.approx(7.0)
+    assert long_plan.metadata["density_reference"] == pytest.approx(99.5)
+
+
+def test_density_eating_invalidation_records_reset_reason_and_remaining_base_state() -> None:
+    manager = RiskManager(RiskLimits(density_stop_buffer=0.25))
+    plan = manager.plan_density_support(
+        symbol="XAUUSD",
+        side=Side.LONG,
+        density_reference=99.5,
+        affected_quantity=3.0,
+        base_position=PositionState(
+            symbol="XAUUSD",
+            side=Side.LONG,
+            quantity=10.0,
+            average_price=100.0,
+        ),
+    )
+
+    still_valid = manager.evaluate_density_invalidation(plan, density_eaten=False)
+    invalidated = manager.evaluate_density_invalidation(plan, density_eaten=True)
+
+    assert still_valid.action == "hold"
+    assert still_valid.reason == "density_still_valid"
+    assert invalidated.action == "reduce_affected_quantity"
+    assert invalidated.reason == "density_eaten"
+    assert invalidated.affected_quantity == pytest.approx(3.0)
+    assert invalidated.remaining_base_quantity == pytest.approx(7.0)
+    assert invalidated.metadata["stop_price"] == pytest.approx(99.25)
+
+
 def test_fake_execution_adapter_is_idempotent_and_reconciles_local_state() -> None:
     adapter = FakeExecutionAdapter()
     request = ExecutionRequest(

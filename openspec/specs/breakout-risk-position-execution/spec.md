@@ -44,15 +44,17 @@ The system SHALL allow add-ons only on new local-extremum breakouts, cascade-lev
 - **AND** the decision trace records the add-on reset reason and remaining base position state
 
 ### Requirement: Density can define support and stop behavior
-The system SHALL allow configured density/support to act as a trade-support premise and stop reference. When density is used as the support premise, stop placement may be behind the density and density-eating/разъедание can trigger exit or risk reduction.
+The system SHALL allow configured density/support to act as a trade-support premise and stop reference. When density is used as the support premise, local planning SHALL record the density reference, stop placement rule, and exit-on-density-eating rule. Density invalidation/eating against the trade SHALL produce a deterministic local reset/reduction decision with a machine-readable reason and remaining base position state.
 
 #### Scenario: Density is used as support
 - **WHEN** a setup uses density in the breakout direction as support
 - **THEN** the trade plan records the density reference, stop placement rule, and exit-on-density-eating rule
+- **AND** the stop reference is side-symmetric behind the density
 
 #### Scenario: Density is eaten against the trade
 - **WHEN** the density used as support is eaten or invalidated against the trade
 - **THEN** the system exits or reduces the affected position according to configured risk policy
+- **AND** the decision trace records `density_eaten` and remaining base position state
 
 ### Requirement: Partial exits follow 30/50/20 framework
 The system SHALL support first fixation of 30%, second fixation of 50%, and final 20% runner/trailer as baseline exit framework.
