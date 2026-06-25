@@ -132,6 +132,14 @@ class BacktestEngine:
         report_path = directory / f"{report.run_id}.json"
         trades_path = directory / f"{report.run_id}-trades.csv"
         equity_path = directory / f"{report.run_id}-equity.csv"
+        drawdown_path = directory / f"{report.run_id}-drawdown.csv"
+        returns_path = directory / f"{report.run_id}-returns.csv"
+        metrics_path = directory / f"{report.run_id}-metrics.csv"
+        scenario_path = directory / f"{report.run_id}-scenario-breakdown.csv"
+        score_path = directory / f"{report.run_id}-score-distribution.csv"
+        false_breakout_path = directory / f"{report.run_id}-false-breakout-analysis.csv"
+        slippage_path = directory / f"{report.run_id}-slippage-report.csv"
+        parameters_path = directory / f"{report.run_id}-parameters.json"
 
         report_path.write_text(
             json.dumps(_normalize(report), sort_keys=True, indent=2, ensure_ascii=False),
@@ -168,7 +176,38 @@ class BacktestEngine:
             writer.writeheader()
             writer.writerows(report.equity_curve)
 
-        paths = [str(report_path), str(trades_path), str(equity_path)]
+        _write_csv_rows(drawdown_path, ["timestamp", "drawdown"], report.drawdown_curve)
+        _write_csv_rows(
+            returns_path,
+            ["index", "return"],
+            [
+                {"index": index, "return": value}
+                for index, value in enumerate(report.return_distribution)
+            ],
+        )
+        _write_metric_csv(metrics_path, "metric", report.metrics)
+        _write_metric_csv(scenario_path, "scenario", report.scenario_breakdown, value_name="count")
+        _write_metric_csv(score_path, "bucket", report.score_distribution, value_name="count")
+        _write_metric_csv(false_breakout_path, "metric", report.false_breakout_analysis)
+        _write_metric_csv(slippage_path, "metric", report.slippage_report)
+        parameters_path.write_text(
+            json.dumps(report.parameter_snapshot, sort_keys=True, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+
+        paths = [
+            str(report_path),
+            str(trades_path),
+            str(equity_path),
+            str(drawdown_path),
+            str(returns_path),
+            str(metrics_path),
+            str(scenario_path),
+            str(score_path),
+            str(false_breakout_path),
+            str(slippage_path),
+            str(parameters_path),
+        ]
         return report.model_copy(update={"artifact_paths": paths})
 
     def _evaluate_closed_bar(
@@ -238,7 +277,9 @@ class BacktestEngine:
         gross_pnl = (exit_price - entry_price) * quantity
         commission = costs.commission_per_unit * quantity * 2
         funding = costs.funding_per_bar * quantity
-        total_cost = commission + funding + costs.spread * quantity + costs.slippage_per_unit * quantity * 2
+        total_cost = (
+            commission + funding + costs.spread * quantity + costs.slippage_per_unit * quantity * 2
+        )
         net_pnl = gross_pnl - total_cost
         trade_id = self._run_id(config_hash, f"{index}:{current['ts'].isoformat()}")[:16]
         return BacktestTrade(
@@ -264,7 +305,9 @@ class BacktestEngine:
         split = max(self.config.min_warmup_bars, bar_count // 2)
         return [
             BacktestWindow(name="in_sample", start_index=0, end_index=split, role="is"),
-            BacktestWindow(name="out_of_sample", start_index=split, end_index=bar_count - 1, role="oos"),
+            BacktestWindow(
+                name="out_of_sample", start_index=split, end_index=bar_count - 1, role="oos"
+            ),
             BacktestWindow(name="walk_forward_train", start_index=0, end_index=split, role="train"),
             BacktestWindow(
                 name="walk_forward_forward",
@@ -276,6 +319,31 @@ class BacktestEngine:
 
     def _run_id(self, config_hash: str, dataset_hash: str) -> str:
         return stable_hash({"config_hash": config_hash, "dataset_hash": dataset_hash})[7:23]
+
+
+def _write_csv_rows(
+    path: Path,
+    fieldnames: Sequence[str],
+    rows: Sequence[Mapping[str, object]],
+) -> None:
+    with path.open("w", newline="", encoding="utf-8") as file:
+        writer = csv.DictWriter(file, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def _write_metric_csv(
+    path: Path,
+    key_name: str,
+    values: Mapping[str, object],
+    *,
+    value_name: str = "value",
+) -> None:
+    rows = [
+        {key_name: key, value_name: _normalize(value)}
+        for key, value in sorted(values.items(), key=lambda item: item[0])
+    ]
+    _write_csv_rows(path, [key_name, value_name], rows)
 
 
 def build_report(
@@ -300,7 +368,9 @@ def build_report(
     score_distribution: dict[str, int] = {}
     false_breakouts = 0
     for trade in trades:
-        scenario_breakdown[trade.scenario.value] = scenario_breakdown.get(trade.scenario.value, 0) + 1
+        scenario_breakdown[trade.scenario.value] = (
+            scenario_breakdown.get(trade.scenario.value, 0) + 1
+        )
         bucket = f"{trade.score // 10 * 10}-{trade.score // 10 * 10 + 9}"
         score_distribution[bucket] = score_distribution.get(bucket, 0) + 1
         if trade.net_pnl < 0 and trade.exit_price < float(trade.metadata.get("level_price", 0.0)):
@@ -334,7 +404,9 @@ def build_report(
 def stable_hash(value: Any) -> str:
     """Return canonical sha256 hash for configs, datasets, and report inputs."""
 
-    canonical = json.dumps(_normalize(value), sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    canonical = json.dumps(
+        _normalize(value), sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    )
     return f"sha256:{hashlib.sha256(canonical.encode('utf-8')).hexdigest()}"
 
 
@@ -367,7 +439,9 @@ def _metrics(
         "win_rate": len(wins) / len(trades) if trades else 0.0,
         "expectancy": sum(trade.net_pnl for trade in trades) / len(trades) if trades else 0.0,
         "average_trade": sum(trade.net_pnl for trade in trades) / len(trades) if trades else 0.0,
-        "avg_holding_time": sum(trade.holding_bars for trade in trades) / len(trades) if trades else 0.0,
+        "avg_holding_time": sum(trade.holding_bars for trade in trades) / len(trades)
+        if trades
+        else 0.0,
         "oos_performance": net_profit,
         "profit_factor": profit_factor,
         "exposure": len(trades) / max(len(equity_curve), 1),
@@ -383,7 +457,9 @@ def _sharpe(returns: Sequence[float]) -> float | None:
     return average / variance**0.5
 
 
-def _drawdown_curve(equity_curve: Sequence[Mapping[str, float | str]]) -> list[dict[str, float | str]]:
+def _drawdown_curve(
+    equity_curve: Sequence[Mapping[str, float | str]],
+) -> list[dict[str, float | str]]:
     peak = float(equity_curve[0]["equity"])
     drawdowns: list[dict[str, float | str]] = []
     for point in equity_curve:

@@ -1,3 +1,5 @@
+import csv
+import json
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -8,7 +10,9 @@ from src.core.models import BacktestConfig, BacktestCostModel, BreakoutStrategyC
 from src.core.schemas import Bar
 
 
-def make_bar(index: int, *, high: float, low: float, close: float, open_: float | None = None) -> Bar:
+def make_bar(
+    index: int, *, high: float, low: float, close: float, open_: float | None = None
+) -> Bar:
     return Bar(
         symbol="XAUUSD",
         timeframe="M15",
@@ -50,7 +54,9 @@ def config() -> BacktestConfig:
             slippage_per_unit=0.02,
             funding_per_bar=0.005,
         ),
-        strategy=BreakoutStrategyConfig(score=ScoreConfig(threshold_normal=30, threshold_reduced=10)),
+        strategy=BreakoutStrategyConfig(
+            score=ScoreConfig(threshold_normal=30, threshold_reduced=10)
+        ),
         export_parquet=True,
     )
 
@@ -106,6 +112,36 @@ def test_report_contains_required_metrics_diagnostics_windows_and_exports(tmp_pa
     assert report.false_breakout_analysis["count"] >= 0
     assert report.slippage_report["configured_per_unit"] == pytest.approx(0.02)
     assert {window.role for window in report.windows} >= {"is", "oos", "train", "forward"}
-    assert len(exported.artifact_paths) == 3
+    expected_names = [
+        f"{report.run_id}.json",
+        f"{report.run_id}-trades.csv",
+        f"{report.run_id}-equity.csv",
+        f"{report.run_id}-drawdown.csv",
+        f"{report.run_id}-returns.csv",
+        f"{report.run_id}-metrics.csv",
+        f"{report.run_id}-scenario-breakdown.csv",
+        f"{report.run_id}-score-distribution.csv",
+        f"{report.run_id}-false-breakout-analysis.csv",
+        f"{report.run_id}-slippage-report.csv",
+        f"{report.run_id}-parameters.json",
+    ]
+    assert [path.split("/")[-1] for path in exported.artifact_paths] == expected_names
     for path in exported.artifact_paths:
         assert (tmp_path / path.split("/")[-1]).exists()
+
+    with (tmp_path / f"{report.run_id}-metrics.csv").open(newline="", encoding="utf-8") as file:
+        metrics = {row["metric"]: row["value"] for row in csv.DictReader(file)}
+    assert metrics["trade_count"] == str(report.metrics["trade_count"])
+
+    with (tmp_path / f"{report.run_id}-scenario-breakdown.csv").open(
+        newline="", encoding="utf-8"
+    ) as file:
+        scenarios = {row["scenario"]: int(row["count"]) for row in csv.DictReader(file)}
+    assert scenarios == report.scenario_breakdown
+
+    with (tmp_path / f"{report.run_id}-parameters.json").open(encoding="utf-8") as file:
+        parameters = json.load(file)
+    assert parameters == report.parameter_snapshot
+
+    second_export = BacktestEngine(config()).export_report(report, tmp_path)
+    assert second_export.artifact_paths == exported.artifact_paths
