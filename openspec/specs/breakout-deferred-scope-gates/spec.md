@@ -1,7 +1,8 @@
 # breakout-deferred-scope-gates Specification
 
 ## Purpose
-TBD - created by archiving change define-breakout-strategy-system. Update Purpose after archive.
+Define non-negotiable guardrails that keep live broker execution, production full-auto behavior, concrete adapters, UI, backtesting runtime, and production operations out of scope until each deferred area receives its own reviewed OpenSpec change.
+
 ## Requirements
 ### Requirement: Deferred scopes require separate OpenSpec changes
 The system SHALL treat live broker execution, full-auto production enablement, concrete live broker adapters, backtesting/reporting implementation, UI/operator dashboard implementation, and monitoring/ops/production hardening as deferred scopes. None of these scopes may be implemented under the foundation-only first GO unless a later OpenSpec change explicitly approves that scope.
@@ -28,15 +29,17 @@ The system SHALL NOT submit, modify, cancel, or query live broker orders or posi
 - **THEN** the work is allowed only if it has no live network side effects and no credential requirements
 
 ### Requirement: Full-auto mode remains non-production until separately approved
-The system SHALL define `full_auto` as a supported mode contract, but production full-auto enablement SHALL remain blocked until a separate OpenSpec change defines production readiness gates, OOS thresholds, risk approvals, operator controls, rollback policy, and live-execution adapter scope.
+The system SHALL define `full_auto` as a supported mode contract, but production full-auto enablement SHALL remain blocked until a separate OpenSpec change defines production readiness gates, OOS thresholds, risk approvals, operator controls, rollback policy, and live-execution adapter scope. Local configuration validation SHALL fail closed for `full_auto` by default; any pre-approval opt-in SHALL be named as contract-validation-only rather than production approval.
 
 #### Scenario: Config enables production full-auto before approval
 - **WHEN** configuration attempts to enable production `full_auto` before a full-auto approval change exists
 - **THEN** startup or mode activation is blocked with an explicit reason
+- **AND** the reason identifies that a dedicated full-auto OpenSpec change is required
 
 #### Scenario: Full-auto is used in tests
 - **WHEN** tests exercise `full_auto` state transitions with fake adapters and no live side effects
 - **THEN** the behavior is allowed as contract validation, not production approval
+- **AND** the test must opt in through the explicit local contract-validation-only guard rather than changing the default production-safe behavior
 
 ### Requirement: Concrete live broker adapters are separate deliverables
 The system SHALL NOT choose or implement a concrete live MT5, Bybit, exchange, broker, or terminal adapter in the foundation slice. Each live adapter SHALL have its own OpenSpec change covering API contract, order semantics, instrument metadata, time zones, rounding, rate limits, reconnect behavior, credential handling, and test environment.

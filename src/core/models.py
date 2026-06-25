@@ -126,6 +126,7 @@ class BreakoutStrategyConfig(BaseModel):
 
     strategy_name: str = "breakout_retest_v1"
     mode: OperationMode = OperationMode.SEMI_AUTO
+    full_auto_contract_validation_only: bool = False
     symbols: list[str] = Field(default_factory=lambda: ["EURUSD", "XAUUSD", "BTCUSDT"])
     execution_timeframe: TimeFrame = TimeFrame.M15
     context_timeframes: list[TimeFrame] = Field(
@@ -137,6 +138,16 @@ class BreakoutStrategyConfig(BaseModel):
     context_filter: ContextFilterConfig = Field(default_factory=ContextFilterConfig)
     score: ScoreConfig = Field(default_factory=ScoreConfig)
     entries: EntryConfig = Field(default_factory=EntryConfig)
+
+    @model_validator(mode="after")
+    def validate_full_auto_guard(self) -> "BreakoutStrategyConfig":
+        if self.mode is OperationMode.FULL_AUTO and not self.full_auto_contract_validation_only:
+            msg = (
+                "full_auto mode requires a dedicated full-auto OpenSpec change "
+                "before production activation"
+            )
+            raise ValueError(msg)
+        return self
 
 
 class Level(BaseModel):

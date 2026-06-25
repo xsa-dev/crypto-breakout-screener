@@ -34,6 +34,7 @@ def test_default_breakout_config_matches_foundation_contract() -> None:
     config = BreakoutStrategyConfig()
 
     assert config.mode is OperationMode.SEMI_AUTO
+    assert config.full_auto_contract_validation_only is False
     assert config.execution_timeframe is TimeFrame.M15
     assert config.context_timeframes == [TimeFrame.H1, TimeFrame.H4, TimeFrame.D1]
     assert config.model_dump(mode="json")["mode"] == "semi_auto"
@@ -43,6 +44,21 @@ def test_default_breakout_config_matches_foundation_contract() -> None:
     assert config.entries.post_breakout_share == pytest.approx(0.40)
     assert config.score.threshold_normal == 70
     assert config.score.threshold_reduced == 50
+
+
+def test_unapproved_full_auto_config_is_blocked_with_explicit_reason() -> None:
+    with pytest.raises(ValidationError, match="dedicated full-auto OpenSpec change"):
+        BreakoutStrategyConfig(mode=OperationMode.FULL_AUTO)
+
+
+def test_full_auto_contract_can_be_instantiated_only_for_contract_validation() -> None:
+    config = BreakoutStrategyConfig(
+        mode=OperationMode.FULL_AUTO,
+        full_auto_contract_validation_only=True,
+    )
+
+    assert config.mode is OperationMode.FULL_AUTO
+    assert config.full_auto_contract_validation_only is True
 
 
 def test_entry_shares_must_sum_to_one() -> None:
