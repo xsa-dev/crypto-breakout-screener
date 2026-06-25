@@ -205,11 +205,18 @@ class LifecycleEngine:
     def invalidate_setup(self, reason: str) -> None:
         self._transition(FsmState.LEVEL_SEARCH, reason)
 
-    def evaluate_retest(self, market: MarketSnapshot, *, level_price: float, tolerance: float = 0.10) -> bool:
+    def evaluate_retest(
+        self,
+        market: MarketSnapshot,
+        *,
+        level_price: float,
+        side: Side = Side.LONG,
+        tolerance: float = 0.10,
+    ) -> bool:
         """Return whether retest touches the zone, holds structure, and resumes impulse."""
 
         touches_zone = market.low <= level_price + tolerance and market.high >= level_price - tolerance
-        holds_level = market.close >= level_price
+        holds_level = market.close >= level_price if side is Side.LONG else market.close <= level_price
         return touches_zone and holds_level and market.micro_impulse
 
     def detect_false_breakout(

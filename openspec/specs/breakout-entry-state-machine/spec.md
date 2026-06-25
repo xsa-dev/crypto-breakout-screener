@@ -59,14 +59,18 @@ The system SHALL confirm long breakouts using `(close_or_tick_price > level + br
 - **THEN** the system does not treat the move as a confirmed breakout
 
 ### Requirement: Retest is a first-class lifecycle scenario
-The system SHALL monitor retest after confirmed breakout. A retest is valid only when price returns to `level ± retest_tolerance`, does not break breakout structure, holds the level, and forms a micro-impulse in the trade direction.
+The system SHALL monitor retest after confirmed breakout. A retest is valid only when price returns to `level ± retest_tolerance`, does not break breakout structure, holds the level side-symmetrically, and forms a micro-impulse in the trade direction. Long retests SHALL hold at or above the level; short retests SHALL hold at or below the level.
 
-#### Scenario: Retest holds
-- **WHEN** price returns to the retest zone, holds the level, and micro-impulse resumes in direction
+#### Scenario: Long retest holds
+- **WHEN** long price returns to the retest zone, holds at or above the level, and micro-impulse resumes in direction
+- **THEN** the system may allow add-on review and stop adjustment according to risk rules
+
+#### Scenario: Short retest holds
+- **WHEN** short price returns to the retest zone, holds at or below the level, and micro-impulse resumes in direction
 - **THEN** the system may allow add-on review and stop adjustment according to risk rules
 
 #### Scenario: Retest fails
-- **WHEN** price returns through the level and does not hold structure
+- **WHEN** price returns through the level, does not hold structure for the setup side, or lacks a directional micro-impulse
 - **THEN** the system transitions to false-breakout handling
 
 ### Requirement: False breakout is detected explicitly

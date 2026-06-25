@@ -228,6 +228,40 @@ def test_setup_invalidation_resets_to_level_search_with_reason() -> None:
     assert lifecycle.history[-1].reason == "recent_break"
 
 
+def test_retest_evaluation_is_side_symmetric_for_short_setups() -> None:
+    lifecycle = LifecycleEngine()
+
+    short_holds = lifecycle.evaluate_retest(
+        snapshot(low=99.95, high=100.05, close=99.80),
+        level_price=100.0,
+        side=Side.SHORT,
+    )
+    short_fails = lifecycle.evaluate_retest(
+        snapshot(low=99.95, high=100.05, close=100.20),
+        level_price=100.0,
+        side=Side.SHORT,
+    )
+
+    assert short_holds is True
+    assert short_fails is False
+
+
+def test_retest_evaluation_keeps_long_hold_semantics_by_default() -> None:
+    lifecycle = LifecycleEngine()
+
+    long_holds = lifecycle.evaluate_retest(
+        snapshot(low=99.95, high=100.05, close=100.20),
+        level_price=100.0,
+    )
+    long_fails = lifecycle.evaluate_retest(
+        snapshot(low=99.95, high=100.05, close=99.80),
+        level_price=100.0,
+    )
+
+    assert long_holds is True
+    assert long_fails is False
+
+
 def test_fast_exit_low_breakout_short_uses_accelerated_no_runner_plan() -> None:
     lifecycle = LifecycleEngine(BreakoutStrategyConfig(fast_exit_for_low_breakouts=True))
 
