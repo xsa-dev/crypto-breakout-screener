@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 set -u
 
-REPO_ROOT="$(git rev-parse --show-toplevel)" || exit 1
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 LOCK_DIR="$REPO_ROOT/.hermes/openspec-runner.lock"
 PID_FILE="$LOCK_DIR/pid"
-LAUNCH_LABEL="terra-appolox-openspec-runner"
+LAUNCH_LABEL="stockseeker-openspec-runner"
+LEGACY_LAUNCH_LABEL="terra-appolox-openspec-runner"
 
 cleanup_lock() {
   rm -f "$PID_FILE"
@@ -14,6 +16,7 @@ cleanup_lock() {
 remove_launch_job() {
   if command -v launchctl >/dev/null 2>&1; then
     launchctl remove "$LAUNCH_LABEL" >/dev/null 2>&1 || true
+    launchctl remove "$LEGACY_LAUNCH_LABEL" >/dev/null 2>&1 || true
   fi
 }
 
