@@ -166,6 +166,8 @@ class BatchExperimentSummary(BaseModel):
     context_timeframes: list[str] = Field(default_factory=lambda: ["H1", "H4", "D1"])
     windows: list[BatchWindowSummary]
     aggregate: BatchAggregate
+    bad_regime_diagnostics_enabled: bool = False
+    diagnostic_artifact_paths: dict[str, str] = Field(default_factory=dict)
     summary_csv_path: str
     summary_json_path: str
 
@@ -313,6 +315,7 @@ def run_batch_experiment(
     research_gates: BacktestResearchGateConfig | None = None,
     feature_filter_profile_name: str | None = None,
     feature_filters: BacktestFeatureFilterConfig | None = None,
+    enable_bad_regime_diagnostics: bool = False,
     symbol: str = "BTCUSDT",
     continue_on_error: bool = True,
     download: DownloadCallable = download_bybit_public_ohlcv_sync,
@@ -341,6 +344,7 @@ def run_batch_experiment(
         feature_filter_settings=feature_filter_settings,
         risk_control_profile=active_risk_control_profile,
         risk_control_settings=risk_control_settings,
+        bad_regime_diagnostics_enabled=enable_bad_regime_diagnostics,
     )
     artifact_dir = Path(output_dir) / "crypto" / symbol / batch_id
     artifact_dir.mkdir(parents=True, exist_ok=True)
@@ -384,6 +388,16 @@ def run_batch_experiment(
     aggregate = _aggregate_rows(rows, thresholds=active_thresholds)
     summary_csv_path = artifact_dir / "summary.csv"
     summary_json_path = artifact_dir / "summary.json"
+    diagnostic_paths = (
+        _write_bad_regime_diagnostics(
+            artifact_dir=artifact_dir,
+            rows=rows,
+            gate_profile=gate_profile,
+            thresholds=active_thresholds,
+        )
+        if enable_bad_regime_diagnostics
+        else {}
+    )
     summary = BatchExperimentSummary(
         batch_id=batch_id,
         gate_profile=gate_profile,
@@ -394,6 +408,8 @@ def run_batch_experiment(
         risk_control_settings=risk_control_settings,
         windows=rows,
         aggregate=aggregate,
+        bad_regime_diagnostics_enabled=enable_bad_regime_diagnostics,
+        diagnostic_artifact_paths=diagnostic_paths,
         summary_csv_path=str(summary_csv_path),
         summary_json_path=str(summary_json_path),
     )
@@ -669,6 +685,269 @@ def _write_summary_json(path: Path, summary: BatchExperimentSummary) -> None:
             temp_path.unlink()
 
 
+def _write_csv_rows(path: Path, fieldnames: list[str], rows: list[dict[str, object]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = path.with_name(f".{path.name}.tmp")
+    try:
+        with temp_path.open("w", newline="", encoding="utf-8") as file:
+            writer = csv.DictWriter(file, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(rows)
+        temp_path.replace(path)
+    finally:
+        if temp_path.exists():
+            temp_path.unlink()
+
+
+def _write_bad_regime_diagnostics(
+    *,
+    artifact_dir: Path,
+    rows: list[BatchWindowSummary],
+    gate_profile: str,
+    thresholds: ResearchThresholds,
+) -> dict[str, str]:
+    failed_rows = [row for row in rows if row.status != "passed" and row.artifact_dir is not None]
+    paths = {
+        "failed_window_diagnostics": artifact_dir / "failed-window-diagnostics.csv",
+        "worst_drawdown_runs": artifact_dir / "worst-drawdown-runs.csv",
+        "bad_regime_bucket_summary": artifact_dir / "bad-regime-bucket-summary.csv",
+    }
+    _write_csv_rows(
+        paths["failed_window_diagnostics"],
+        [
+            "window_label",
+            "profile",
+            "run_id",
+            "status",
+            "blockers",
+            "failure_class",
+            "trade_count",
+            "net_profit",
+            "max_drawdown",
+            "profit_factor",
+            "threshold_min_net_profit",
+            "threshold_min_profit_factor",
+            "threshold_min_max_drawdown",
+            "artifact_dir",
+        ],
+        [_failed_window_diagnostic_row(row, gate_profile=gate_profile, thresholds=thresholds) for row in failed_rows],
+    )
+    _write_csv_rows(
+        paths["worst_drawdown_runs"],
+        [
+            "window_label",
+            "profile",
+            "run_id",
+            "min_drawdown",
+            "min_drawdown_timestamp",
+            "worst_negative_day",
+            "worst_negative_day_net_pnl",
+            "worst_negative_day_trade_count",
+            "profitable_but_drawdown_blocked",
+            "negative_expectancy_window",
+            "source_drawdown_path",
+            "source_worst_day_path",
+        ],
+        [_worst_drawdown_row(row, gate_profile=gate_profile) for row in failed_rows],
+    )
+    _write_csv_rows(
+        paths["bad_regime_bucket_summary"],
+        [
+            "window_label",
+            "profile",
+            "run_id",
+            "bucket_source",
+            "diagnostic_dimension",
+            "bucket",
+            "trade_count",
+            "net_pnl",
+            "average_trade",
+            "win_rate",
+            "profit_factor",
+            "no_lookahead_source",
+        ],
+        _bad_regime_bucket_rows(failed_rows, gate_profile=gate_profile),
+    )
+    return {key: str(path) for key, path in paths.items()}
+
+
+def _failed_window_diagnostic_row(
+    row: BatchWindowSummary,
+    *,
+    gate_profile: str,
+    thresholds: ResearchThresholds,
+) -> dict[str, object]:
+    return {
+        "window_label": row.window_label,
+        "profile": gate_profile,
+        "run_id": row.run_id or "unavailable",
+        "status": row.status,
+        "blockers": ";".join(row.blockers),
+        "failure_class": _failure_class(row),
+        "trade_count": row.trade_count if row.trade_count is not None else "unavailable",
+        "net_profit": row.net_profit if row.net_profit is not None else "unavailable",
+        "max_drawdown": row.max_drawdown if row.max_drawdown is not None else "unavailable",
+        "profit_factor": row.profit_factor if row.profit_factor is not None else "unavailable",
+        "threshold_min_net_profit": thresholds.min_net_profit,
+        "threshold_min_profit_factor": thresholds.min_profit_factor,
+        "threshold_min_max_drawdown": thresholds.min_max_drawdown,
+        "artifact_dir": row.artifact_dir or "unavailable",
+    }
+
+
+def _failure_class(row: BatchWindowSummary) -> str:
+    if row.net_profit is not None and row.net_profit > 0 and row.profit_factor is not None and row.profit_factor > 1:
+        if "max_drawdown_below_threshold" in row.blockers:
+            return "profitable_drawdown_blocked"
+    if row.net_profit is not None and row.net_profit <= 0:
+        return "negative_or_flat_expectancy"
+    if row.profit_factor is not None and row.profit_factor <= 1:
+        return "profit_factor_blocked"
+    if "max_drawdown_below_threshold" in row.blockers:
+        return "drawdown_blocked"
+    return "other_blocked"
+
+
+def _worst_drawdown_row(row: BatchWindowSummary, *, gate_profile: str) -> dict[str, object]:
+    artifact_dir = Path(row.artifact_dir) if row.artifact_dir else None
+    drawdown_path = artifact_dir / f"{row.run_id}-drawdown.csv" if artifact_dir and row.run_id else None
+    worst_day_path = (
+        Path(row.feature_artifact_paths["worst_day_attribution"])
+        if "worst_day_attribution" in row.feature_artifact_paths
+        else None
+    )
+    min_drawdown, min_timestamp = _min_drawdown_point(drawdown_path)
+    worst_day = _worst_negative_day(worst_day_path)
+    return {
+        "window_label": row.window_label,
+        "profile": gate_profile,
+        "run_id": row.run_id or "unavailable",
+        "min_drawdown": min_drawdown,
+        "min_drawdown_timestamp": min_timestamp,
+        "worst_negative_day": worst_day.get("day", "unavailable"),
+        "worst_negative_day_net_pnl": worst_day.get("net_pnl", "unavailable"),
+        "worst_negative_day_trade_count": worst_day.get("trade_count", "unavailable"),
+        "profitable_but_drawdown_blocked": _failure_class(row) == "profitable_drawdown_blocked",
+        "negative_expectancy_window": row.net_profit is not None and row.net_profit <= 0,
+        "source_drawdown_path": str(drawdown_path) if drawdown_path else "unavailable",
+        "source_worst_day_path": str(worst_day_path) if worst_day_path else "unavailable",
+    }
+
+
+def _bad_regime_bucket_rows(rows: list[BatchWindowSummary], *, gate_profile: str) -> list[dict[str, object]]:
+    output: list[dict[str, object]] = []
+    for row in rows:
+        output.extend(_feature_bucket_diagnostic_rows(row, gate_profile=gate_profile))
+        output.extend(_regime_bucket_diagnostic_rows(row, gate_profile=gate_profile))
+    return sorted(
+        output,
+        key=lambda item: (
+            str(item["window_label"]),
+            str(item["bucket_source"]),
+            str(item["diagnostic_dimension"]),
+            str(item["bucket"]),
+        ),
+    )
+
+
+def _feature_bucket_diagnostic_rows(row: BatchWindowSummary, *, gate_profile: str) -> list[dict[str, object]]:
+    path = row.feature_artifact_paths.get("feature_bucket_pnl")
+    if path is None:
+        return []
+    output: list[dict[str, object]] = []
+    for source_row in _read_csv_dicts(Path(path)):
+        output.append(
+            {
+                "window_label": row.window_label,
+                "profile": gate_profile,
+                "run_id": row.run_id or "unavailable",
+                "bucket_source": "feature_bucket_pnl",
+                "diagnostic_dimension": source_row.get("feature", "unavailable"),
+                "bucket": source_row.get("bucket", "unavailable"),
+                "trade_count": source_row.get("trade_count", "unavailable"),
+                "net_pnl": source_row.get("net_pnl", "unavailable"),
+                "average_trade": source_row.get("average_trade", "unavailable"),
+                "win_rate": source_row.get("win_rate", "unavailable"),
+                "profit_factor": source_row.get("profit_factor", "unavailable"),
+                "no_lookahead_source": "entry_feature_snapshot",
+            }
+        )
+    return output
+
+
+def _regime_bucket_diagnostic_rows(row: BatchWindowSummary, *, gate_profile: str) -> list[dict[str, object]]:
+    path = row.feature_artifact_paths.get("regime_bucket_summary")
+    if path is None:
+        return []
+    output: list[dict[str, object]] = []
+    for source_row in _read_csv_dicts(Path(path)):
+        output.append(
+            {
+                "window_label": row.window_label,
+                "profile": gate_profile,
+                "run_id": row.run_id or "unavailable",
+                "bucket_source": "regime_bucket_summary",
+                "diagnostic_dimension": "combined_regime",
+                "bucket": source_row.get("regime", "unavailable"),
+                "trade_count": source_row.get("trade_count", "unavailable"),
+                "net_pnl": source_row.get("net_pnl", "unavailable"),
+                "average_trade": source_row.get("average_trade", "unavailable"),
+                "win_rate": source_row.get("win_rate", "unavailable"),
+                "profit_factor": source_row.get("profit_factor", "unavailable"),
+                "no_lookahead_source": "entry_feature_snapshot",
+            }
+        )
+    return output
+
+
+def _min_drawdown_point(path: Path | None) -> tuple[float | str, str]:
+    if path is None or not path.exists():
+        return "unavailable", "unavailable"
+    min_value: float | None = None
+    min_timestamp = "unavailable"
+    for row in _read_csv_dicts(path):
+        value = _parse_optional_float(row.get("drawdown"))
+        if value is None:
+            continue
+        if min_value is None or value < min_value:
+            min_value = value
+            min_timestamp = str(row.get("timestamp", "unavailable"))
+    return (min_value, min_timestamp) if min_value is not None else ("unavailable", "unavailable")
+
+
+def _worst_negative_day(path: Path | None) -> dict[str, object]:
+    if path is None or not path.exists():
+        return {}
+    worst: dict[str, object] = {}
+    worst_pnl: float | None = None
+    for row in _read_csv_dicts(path):
+        net_pnl = _parse_optional_float(row.get("net_pnl"))
+        if net_pnl is None:
+            continue
+        if worst_pnl is None or net_pnl < worst_pnl:
+            worst_pnl = net_pnl
+            worst = {
+                "day": row.get("day", "unavailable"),
+                "net_pnl": net_pnl,
+                "trade_count": row.get("trade_count", "unavailable"),
+            }
+    return worst
+
+
+def _read_csv_dicts(path: Path) -> list[dict[str, str]]:
+    with path.open(newline="", encoding="utf-8") as file:
+        return [dict(row) for row in csv.DictReader(file)]
+
+
+def _parse_optional_float(value: object) -> float | None:
+    if value in {None, "", "unavailable"}:
+        return None
+    try:
+        return float(str(value))
+    except ValueError:
+        return None
+
+
 def _csv_row(row: BatchWindowSummary) -> dict[str, str | int | float | None]:
     return {
         "window_label": row.window_label,
@@ -749,6 +1028,7 @@ def _batch_id(
     feature_filter_settings: dict[str, Any] | None = None,
     risk_control_profile: str = "none",
     risk_control_settings: dict[str, Any] | None = None,
+    bad_regime_diagnostics_enabled: bool = False,
 ) -> str:
     payload = {
         "windows": [
@@ -762,6 +1042,7 @@ def _batch_id(
         "feature_filter_settings": feature_filter_settings or {},
         "risk_control_profile": risk_control_profile,
         "risk_control_settings": risk_control_settings or {},
+        "bad_regime_diagnostics_enabled": bad_regime_diagnostics_enabled,
         "symbol": "BTCUSDT",
         "source": "bybit_public",
         "execution_timeframe": "M15",
@@ -834,6 +1115,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--min-net-profit", type=float, default=0.0)
     parser.add_argument("--min-profit-factor", type=float, default=1.0)
     parser.add_argument("--min-max-drawdown", type=float, default=-0.35)
+    parser.add_argument("--bad-regime-diagnostics", action="store_true")
     return parser
 
 
@@ -850,6 +1132,7 @@ def main(argv: list[str] | None = None) -> int:
             min_max_drawdown=args.min_max_drawdown,
         ),
         gate_profile=args.gate_profile,
+        enable_bad_regime_diagnostics=args.bad_regime_diagnostics,
         symbol=args.symbol,
         continue_on_error=not args.stop_on_error,
     )

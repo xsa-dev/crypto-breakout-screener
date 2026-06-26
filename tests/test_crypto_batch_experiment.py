@@ -194,6 +194,69 @@ def test_batch_runner_records_drawdown_risk_control_profile(tmp_path) -> None:
     assert json.loads(rows[0]["risk_control_skip_counts_json"]) == row.risk_control_skip_counts
 
 
+
+
+def test_batch_runner_writes_bad_regime_diagnostics_for_failed_windows(tmp_path) -> None:
+    windows = [
+        BatchWindow(
+            label="pass",
+            start=datetime(2024, 1, 1, tzinfo=UTC),
+            end=datetime(2024, 1, 2, tzinfo=UTC),
+        ),
+        BatchWindow(
+            label="fail",
+            start=datetime(2024, 1, 2, tzinfo=UTC),
+            end=datetime(2024, 1, 3, tzinfo=UTC),
+        ),
+    ]
+
+    def run_single(**kwargs: Any) -> CryptoExperimentResult:
+        csv_path = Path(kwargs["csv_path"])
+        net = -50.0 if csv_path.stem == "20240102" else 100.0
+        pf = 0.8 if csv_path.stem == "20240102" else 1.5
+        return _fake_run_factory(tmp_path, net_profit=net, profit_factor=pf)(**kwargs)
+
+    result = run_batch_experiment(
+        windows=windows,
+        output_dir=tmp_path / "backtests",
+        market_data_dir=tmp_path / "market-data",
+        gate_profile="conservative-v1-m15-slope-positive-max-trades-8",
+        enable_bad_regime_diagnostics=True,
+        download=_fake_download_factory(tmp_path),
+        run_single=run_single,
+    )
+
+    assert result.summary.bad_regime_diagnostics_enabled is True
+    paths = {key: Path(value) for key, value in result.summary.diagnostic_artifact_paths.items()}
+    assert set(paths) == {
+        "bad_regime_bucket_summary",
+        "failed_window_diagnostics",
+        "worst_drawdown_runs",
+    }
+
+    with paths["failed_window_diagnostics"].open(newline="", encoding="utf-8") as file:
+        failed_rows = list(csv.DictReader(file))
+    assert [row["window_label"] for row in failed_rows] == ["fail"]
+    assert failed_rows[0]["profile"] == "conservative-v1-m15-slope-positive-max-trades-8"
+    assert failed_rows[0]["failure_class"] == "negative_or_flat_expectancy"
+
+    with paths["worst_drawdown_runs"].open(newline="", encoding="utf-8") as file:
+        drawdown_rows = list(csv.DictReader(file))
+    assert drawdown_rows[0]["window_label"] == "fail"
+    assert drawdown_rows[0]["min_drawdown"] == "-0.42"
+    assert drawdown_rows[0]["worst_negative_day"] == "2024-01-02"
+
+    with paths["bad_regime_bucket_summary"].open(newline="", encoding="utf-8") as file:
+        bucket_rows = list(csv.DictReader(file))
+    assert {row["window_label"] for row in bucket_rows} == {"fail"}
+    assert {row["bucket_source"] for row in bucket_rows} == {"feature_bucket_pnl", "regime_bucket_summary"}
+    assert {row["no_lookahead_source"] for row in bucket_rows} == {"entry_feature_snapshot"}
+
+    summary = json.loads(result.summary_json_path.read_text(encoding="utf-8"))
+    assert summary["bad_regime_diagnostics_enabled"] is True
+    assert set(summary["diagnostic_artifact_paths"]) == set(paths)
+
+
 def test_batch_verdict_blocks_failed_thresholds(tmp_path) -> None:
     windows = [
         BatchWindow(
@@ -330,6 +393,7 @@ def _fake_run_factory(
         feature_bucket_path = artifact_dir / f"{run_id}-feature-bucket-pnl.csv"
         regime_bucket_path = artifact_dir / f"{run_id}-regime-bucket-summary.csv"
         worst_day_path = artifact_dir / f"{run_id}-worst-day-attribution.csv"
+        drawdown_path = artifact_dir / f"{run_id}-drawdown.csv"
         parameters_path = artifact_dir / f"{run_id}-parameters.json"
         metrics_path.write_text(
             "metric,value\n"
@@ -344,8 +408,29 @@ def _fake_run_factory(
             encoding="utf-8",
         )
         manifest_path = artifact_dir / f"{run_id}-dataset-manifest.json"
-        for path in (entry_features_path, feature_bucket_path, regime_bucket_path, worst_day_path):
-            path.write_text("placeholder\n", encoding="utf-8")
+        entry_features_path.write_text("placeholder\n", encoding="utf-8")
+        feature_bucket_path.write_text(
+            "feature,bucket,trade_count,net_pnl,average_trade,win_rate,profit_factor\n"
+            "atr_percentile,0.75..1.0,4,-120.0,-30.0,0.25,0.5\n"
+            "candle_body_ratio,0.5..0.75,6,220.0,36.6666666667,0.66,2.0\n",
+            encoding="utf-8",
+        )
+        regime_bucket_path.write_text(
+            "regime,trade_count,net_pnl,average_trade,win_rate,profit_factor\n"
+            "atr=0.75..1.0|body=0.5..0.75|h1=long,4,-120.0,-30.0,0.25,0.5\n",
+            encoding="utf-8",
+        )
+        worst_day_path.write_text(
+            "day,trade_count,net_pnl,dominant_atr_bucket,dominant_candle_body_bucket,context_available\n"
+            "2024-01-02,3,-150.0,0.75..1.0,0.5..0.75,True\n",
+            encoding="utf-8",
+        )
+        drawdown_path.write_text(
+            "timestamp,drawdown\n"
+            "2024-01-01T00:00:00+00:00,0\n"
+            "2024-01-02T00:00:00+00:00,-0.42\n",
+            encoding="utf-8",
+        )
         manifest_path.write_text(
             json.dumps(
                 {
@@ -390,6 +475,7 @@ def _fake_run_factory(
                 str(feature_bucket_path),
                 str(regime_bucket_path),
                 str(worst_day_path),
+                str(drawdown_path),
                 str(parameters_path),
                 str(manifest_path),
             ],
