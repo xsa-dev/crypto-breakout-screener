@@ -320,15 +320,23 @@ def run_crypto_experiment(
             score=ScoreConfig(threshold_normal=30, threshold_reduced=10),
         ),
     )
-    engine = BacktestEngine(config)
+    context_paths = context_csv_paths or {}
+    context_bars = {
+        context_timeframe: import_crypto_csv(
+            context_path,
+            symbol=symbol,
+            timeframe=context_timeframe,
+        ).bars
+        for context_timeframe, context_path in context_paths.items()
+    }
+    engine = BacktestEngine(config, context_bars=context_bars)
     report = engine.run(bars)
     unavailable = dict(report.unavailable_reasons)
     if funding_per_bar == 0:
         unavailable["funding"] = DEFAULT_LIMITATIONS["funding"]
-    context_paths = context_csv_paths or {}
     if context_paths:
         unavailable["context_timeframes"] = (
-            "H1/H4/D1 were downloaded as context datasets; current backtest consumes M15 only"
+            "H1/H4/D1 are consumed by research feature diagnostics; M15 remains execution input"
         )
     else:
         unavailable["context_timeframes"] = DEFAULT_LIMITATIONS["context_timeframes"]

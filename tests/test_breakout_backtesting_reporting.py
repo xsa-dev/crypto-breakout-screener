@@ -8,11 +8,15 @@ from pydantic import ValidationError
 from src.app.breakout.backtesting import (
     BacktestEngine,
     daily_trade_summary,
+    entry_feature_snapshots,
     evaluate_production_oos_gate,
+    feature_bucket_pnl,
     lifecycle_diagnostics,
+    regime_bucket_summary,
     score_bucket_pnl,
     stable_hash,
     weekly_trade_summary,
+    worst_day_attribution,
 )
 from src.core.models import (
     BacktestConfig,
@@ -142,6 +146,10 @@ def test_report_contains_required_metrics_diagnostics_windows_and_exports(tmp_pa
         f"{report.run_id}-weekly-summary.csv",
         f"{report.run_id}-lifecycle-diagnostics.csv",
         f"{report.run_id}-score-bucket-pnl.csv",
+        f"{report.run_id}-entry-feature-snapshots.csv",
+        f"{report.run_id}-feature-bucket-pnl.csv",
+        f"{report.run_id}-regime-bucket-summary.csv",
+        f"{report.run_id}-worst-day-attribution.csv",
         f"{report.run_id}-parameters.json",
     ]
     assert [path.split("/")[-1] for path in exported.artifact_paths] == expected_names
@@ -191,6 +199,26 @@ def test_report_contains_required_metrics_diagnostics_windows_and_exports(tmp_pa
     ) as file:
         score_rows = list(csv.DictReader(file))
     assert score_rows
+
+    with (tmp_path / f"{report.run_id}-entry-feature-snapshots.csv").open(
+        newline="",
+        encoding="utf-8",
+    ) as file:
+        feature_rows = list(csv.DictReader(file))
+    assert len(feature_rows) == len(report.trades)
+    assert "feature_atr" in feature_rows[0]
+    assert "feature_context_H1_available" in feature_rows[0]
+
+    report_json = json.loads((tmp_path / f"{report.run_id}.json").read_text(encoding="utf-8"))
+    assert "feature_atr" not in report_json["trades"][0]["metadata"]
+    assert "level_price" in report_json["trades"][0]["metadata"]
+
+    with (tmp_path / f"{report.run_id}-feature-bucket-pnl.csv").open(
+        newline="",
+        encoding="utf-8",
+    ) as file:
+        feature_bucket_rows = list(csv.DictReader(file))
+    assert feature_bucket_rows
 
     second_export = BacktestEngine(config()).export_report(report, tmp_path)
     assert second_export.artifact_paths == exported.artifact_paths
@@ -359,3 +387,45 @@ def test_daily_stop_loss_uses_exit_day_for_midnight_crossing_loss() -> None:
     assert report.trades[-1].entry_time.date() != report.trades[-1].exit_time.date()
     skip_counts = report.parameter_snapshot["research_gate_skip_counts"]
     assert "skipped_daily_stop_loss" in skip_counts
+
+
+def test_entry_feature_snapshots_include_closed_context_alignment() -> None:
+    bars = breakout_dataset()
+    entry_time = bars[7]["ts"]
+    context = {
+        "H1": [
+            Bar(**{**bars[0], "timeframe": "H1", "ts": entry_time - timedelta(hours=2), "close": 100.0}),
+            Bar(**{**bars[0], "timeframe": "H1", "ts": entry_time - timedelta(minutes=45), "close": 777.0}),
+            Bar(**{**bars[0], "timeframe": "H1", "ts": entry_time, "close": 105.0}),
+            Bar(**{**bars[0], "timeframe": "H1", "ts": entry_time + timedelta(hours=1), "close": 999.0}),
+        ]
+    }
+
+    report = BacktestEngine(config(), context_bars=context).run(bars)
+    rows = entry_feature_snapshots(report.trades)
+
+    assert rows
+    assert rows[0]["feature_context_H1_available"] is True
+    assert rows[0]["feature_context_H1_timestamp"] == (entry_time - timedelta(hours=2)).isoformat()
+    assert "777" not in str(rows[0])
+    assert "105" not in str(rows[0])
+    assert "999" not in str(rows[0])
+
+
+def test_missing_context_feature_markers_do_not_fail_backtest() -> None:
+    report = BacktestEngine(config()).run(breakout_dataset())
+    row = entry_feature_snapshots(report.trades)[0]
+
+    assert row["feature_context_H1_available"] is False
+    assert row["feature_context_H1_reason"] == "not_supplied_or_no_closed_bar"
+
+
+def test_feature_bucket_regime_and_worst_day_diagnostics_are_deterministic() -> None:
+    report = BacktestEngine(config()).run([*breakout_dataset(), make_bar(11, high=110.0, low=80.0, close=100.0)])
+
+    first_buckets = feature_bucket_pnl(report.trades)
+    second_buckets = feature_bucket_pnl(report.trades)
+
+    assert first_buckets == second_buckets
+    assert regime_bucket_summary(report.trades)
+    assert worst_day_attribution(report.trades)

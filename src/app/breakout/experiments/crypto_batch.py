@@ -52,6 +52,7 @@ BATCH_SUMMARY_COLUMNS = [
     "feed_gap_count",
     "context_timeframes_available",
     "gate_settings_json",
+    "feature_artifact_paths_json",
     "downloaded_csv_paths_json",
     "manifest_path",
     "artifact_dir",
@@ -110,6 +111,7 @@ class BatchWindowSummary(BaseModel):
     feed_gap_count: int | None = None
     context_timeframes_available: list[str] = Field(default_factory=list)
     gate_settings: dict[str, Any] = Field(default_factory=dict)
+    feature_artifact_paths: dict[str, str] = Field(default_factory=dict)
     downloaded_csv_paths: dict[str, str] = Field(default_factory=dict)
     manifest_path: str | None = None
     artifact_dir: str | None = None
@@ -392,6 +394,7 @@ def _run_batch_window(
         expectancy=_optional_float(metrics.get("expectancy")),
         feed_gap_count=feed_gap_count,
         context_timeframes_available=available_context,
+        feature_artifact_paths=_feature_artifact_paths(result.artifact_paths),
         downloaded_csv_paths=downloaded.csv_paths,
         manifest_path=str(result.manifest_path),
         artifact_dir=str(result.artifact_dir),
@@ -524,9 +527,25 @@ def _csv_row(row: BatchWindowSummary) -> dict[str, str | int | float | None]:
         "feed_gap_count": row.feed_gap_count,
         "context_timeframes_available": ";".join(row.context_timeframes_available),
         "gate_settings_json": json.dumps(row.gate_settings, sort_keys=True),
+        "feature_artifact_paths_json": json.dumps(row.feature_artifact_paths, sort_keys=True),
         "downloaded_csv_paths_json": json.dumps(row.downloaded_csv_paths, sort_keys=True),
         "manifest_path": row.manifest_path,
         "artifact_dir": row.artifact_dir,
+    }
+
+
+def _feature_artifact_paths(paths: list[str]) -> dict[str, str]:
+    suffixes = {
+        "entry_feature_snapshots": "-entry-feature-snapshots.csv",
+        "feature_bucket_pnl": "-feature-bucket-pnl.csv",
+        "regime_bucket_summary": "-regime-bucket-summary.csv",
+        "worst_day_attribution": "-worst-day-attribution.csv",
+    }
+    return {
+        key: path
+        for key, suffix in suffixes.items()
+        for path in paths
+        if path.endswith(suffix)
     }
 
 

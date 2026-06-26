@@ -75,6 +75,7 @@ def test_batch_runner_writes_deterministic_summary_and_research_verdict(tmp_path
     assert set(json.loads(rows[0]["downloaded_csv_paths_json"])) == {"M15", "H1", "H4", "D1"}
     assert rows[0]["gate_profile"] == "baseline"
     assert "min_entry_score" in json.loads(rows[0]["gate_settings_json"])
+    assert "entry_feature_snapshots" in json.loads(rows[0]["feature_artifact_paths_json"])
 
 
 def test_batch_runner_records_conservative_gate_profile(tmp_path) -> None:
@@ -239,6 +240,10 @@ def _fake_run_factory(
         artifact_dir = output_dir / "crypto" / "BTCUSDT" / run_id
         artifact_dir.mkdir(parents=True, exist_ok=True)
         metrics_path = artifact_dir / f"{run_id}-metrics.csv"
+        entry_features_path = artifact_dir / f"{run_id}-entry-feature-snapshots.csv"
+        feature_bucket_path = artifact_dir / f"{run_id}-feature-bucket-pnl.csv"
+        regime_bucket_path = artifact_dir / f"{run_id}-regime-bucket-summary.csv"
+        worst_day_path = artifact_dir / f"{run_id}-worst-day-attribution.csv"
         metrics_path.write_text(
             "metric,value\n"
             "trade_count,10\n"
@@ -252,6 +257,8 @@ def _fake_run_factory(
             encoding="utf-8",
         )
         manifest_path = artifact_dir / f"{run_id}-dataset-manifest.json"
+        for path in (entry_features_path, feature_bucket_path, regime_bucket_path, worst_day_path):
+            path.write_text("placeholder\n", encoding="utf-8")
         manifest_path.write_text(
             json.dumps(
                 {
@@ -275,7 +282,14 @@ def _fake_run_factory(
             win_rate=0.6,
             artifact_dir=artifact_dir,
             manifest_path=manifest_path,
-            artifact_paths=[str(metrics_path), str(manifest_path)],
+            artifact_paths=[
+                str(metrics_path),
+                str(entry_features_path),
+                str(feature_bucket_path),
+                str(regime_bucket_path),
+                str(worst_day_path),
+                str(manifest_path),
+            ],
         )
 
     return run_single

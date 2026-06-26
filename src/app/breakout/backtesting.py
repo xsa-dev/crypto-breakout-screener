@@ -4,10 +4,11 @@ import csv
 import hashlib
 import json
 import random
+from bisect import bisect_right
 from collections import Counter, defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from enum import Enum
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -42,7 +43,7 @@ class ResearchGateState:
     """Mutable local state for disabled-by-default research entry gates."""
 
     last_exit_time: datetime | None = None
-    last_trade_index: int | None = None
+    last_exit_index: int | None = None
     last_trade_net_pnl: float | None = None
     cooldown_until_index: int = -1
     trades_by_day: dict[str, int] = field(default_factory=dict)
@@ -53,7 +54,12 @@ class ResearchGateState:
 class BacktestEngine:
     """Closed-bar deterministic replay engine with no live broker side effects."""
 
-    def __init__(self, config: BacktestConfig | None = None) -> None:
+    def __init__(
+        self,
+        config: BacktestConfig | None = None,
+        *,
+        context_bars: Mapping[str, Sequence[Bar]] | None = None,
+    ) -> None:
         self.config = config or BacktestConfig(
             cost_model=BacktestCostModel(spread=0.01, slippage_per_unit=0.01)
         )
@@ -65,6 +71,14 @@ class BacktestEngine:
         )
         self.entry_engine = EntryEngine(self.config.strategy)
         self.risk_manager = RiskManager(RiskLimits(equity=self.config.initial_equity))
+        self.context_bars = {
+            timeframe: sorted(bars, key=lambda bar: bar["ts"])
+            for timeframe, bars in (context_bars or {}).items()
+        }
+        self.context_close_timestamps = {
+            timeframe: [_bar_close_time(bar) for bar in bars]
+            for timeframe, bars in self.context_bars.items()
+        }
 
     def run(self, bars: Sequence[Bar]) -> BacktestReport:
         """Replay bars using only data available at each simulated timestamp."""
@@ -171,10 +185,19 @@ class BacktestEngine:
         weekly_summary_path = directory / f"{report.run_id}-weekly-summary.csv"
         lifecycle_path = directory / f"{report.run_id}-lifecycle-diagnostics.csv"
         score_bucket_pnl_path = directory / f"{report.run_id}-score-bucket-pnl.csv"
+        entry_features_path = directory / f"{report.run_id}-entry-feature-snapshots.csv"
+        feature_bucket_pnl_path = directory / f"{report.run_id}-feature-bucket-pnl.csv"
+        regime_bucket_path = directory / f"{report.run_id}-regime-bucket-summary.csv"
+        worst_day_path = directory / f"{report.run_id}-worst-day-attribution.csv"
         parameters_path = directory / f"{report.run_id}-parameters.json"
 
         report_path.write_text(
-            json.dumps(_normalize(report), sort_keys=True, indent=2, ensure_ascii=False),
+            json.dumps(
+                _normalize(_report_without_feature_metadata(report)),
+                sort_keys=True,
+                indent=2,
+                ensure_ascii=False,
+            ),
             encoding="utf-8",
         )
         with trades_path.open("w", newline="", encoding="utf-8") as file:
@@ -258,6 +281,22 @@ class BacktestEngine:
             ["score", "trade_count", "net_pnl", "average_trade", "win_rate"],
             score_bucket_pnl(report.trades),
         )
+        _write_dynamic_csv_rows(entry_features_path, entry_feature_snapshots(report.trades))
+        _write_csv_rows(
+            feature_bucket_pnl_path,
+            ["feature", "bucket", "trade_count", "net_pnl", "average_trade", "win_rate", "profit_factor"],
+            feature_bucket_pnl(report.trades),
+        )
+        _write_csv_rows(
+            regime_bucket_path,
+            ["regime", "trade_count", "net_pnl", "average_trade", "win_rate", "profit_factor"],
+            regime_bucket_summary(report.trades),
+        )
+        _write_csv_rows(
+            worst_day_path,
+            ["day", "trade_count", "net_pnl", "dominant_atr_bucket", "dominant_candle_body_bucket", "context_available"],
+            worst_day_attribution(report.trades),
+        )
         parameters_path.write_text(
             json.dumps(report.parameter_snapshot, sort_keys=True, indent=2, ensure_ascii=False),
             encoding="utf-8",
@@ -278,6 +317,10 @@ class BacktestEngine:
             str(weekly_summary_path),
             str(lifecycle_path),
             str(score_bucket_pnl_path),
+            str(entry_features_path),
+            str(feature_bucket_pnl_path),
+            str(regime_bucket_path),
+            str(worst_day_path),
             str(parameters_path),
         ]
         return report.model_copy(update={"artifact_paths": paths})
@@ -298,6 +341,15 @@ class BacktestEngine:
         level = pivot_highs[-1]
         features = self.setup_evaluator.calculate_features(list(history), side=Side.LONG)
         score = self.setup_evaluator.score(features, side=Side.LONG)
+        feature_snapshot = self._entry_feature_snapshot(
+            history=history,
+            current=current,
+            index=index,
+            level_price=level.price,
+            features=features,
+            score=score,
+            gate_state=gate_state,
+        )
         score_blocker = self._research_gate_reason(
             gate_state,
             current=current,
@@ -340,6 +392,7 @@ class BacktestEngine:
             index=index,
             config_hash=config_hash,
             level_price=level.price,
+            feature_snapshot=feature_snapshot,
         )
 
     def _close_next_bar_trade(
@@ -352,6 +405,7 @@ class BacktestEngine:
         index: int,
         config_hash: str,
         level_price: float,
+        feature_snapshot: Mapping[str, float | int | str | bool],
     ) -> BacktestTrade:
         costs = self.config.cost_model
         entry_price = current["close"] + costs.spread / 2 + costs.slippage_per_unit
@@ -380,8 +434,69 @@ class BacktestEngine:
             scenario=ScenarioType.CONSOLIDATION_BREAKOUT,
             score=score.total,
             slippage=costs.slippage_per_unit,
-            metadata={"level_price": level_price, "index": index},
+            metadata={"level_price": level_price, "index": index, **dict(feature_snapshot)},
         )
+
+    def _entry_feature_snapshot(
+        self,
+        *,
+        history: Sequence[Bar],
+        current: Bar,
+        index: int,
+        level_price: float,
+        features: Any,
+        score: Any,
+        gate_state: ResearchGateState,
+    ) -> dict[str, float | int | str | bool]:
+        atr = _safe_positive_float(getattr(features, "atr", None))
+        current_range = max(current["high"] - current["low"], 1e-9)
+        body = abs(current["close"] - current["open"])
+        day_key = current["ts"].date().isoformat()
+        snapshot: dict[str, float | int | str | bool] = {
+            "feature_entry_index": index,
+            "feature_setup_score_total": int(getattr(score, "total", 0)),
+            "feature_score_eligibility": str(getattr(score, "eligibility", "unknown")),
+            "feature_score_consolidation": int(getattr(score, "consolidation", 0)),
+            "feature_score_slow_approach": int(getattr(score, "slow_approach", 0)),
+            "feature_score_trend": int(getattr(score, "trend", 0)),
+            "feature_score_activity": int(getattr(score, "activity", 0)),
+            "feature_score_density": int(getattr(score, "density", 0)),
+            "feature_atr": atr if atr is not None else "unavailable",
+            "feature_atr_percentile": _atr_percentile(history, atr),
+            "feature_candle_body_range_ratio": body / current_range,
+            "feature_close_position_in_range": (current["close"] - current["low"]) / current_range,
+            "feature_breakout_distance_atr": _ratio_or_unavailable(current["close"] - level_price, atr),
+            "feature_consolidation_range_atr": _value_or_unavailable(getattr(features, "consolidation_range_atr", None)),
+            "feature_approach_velocity": _value_or_unavailable(getattr(features, "approach_velocity", None)),
+            "feature_activity_ratio": _value_or_unavailable(getattr(features, "activity_ratio", None)),
+            "feature_ema_fast_distance_atr": _ratio_or_unavailable(current["close"] - getattr(features, "ema_fast", 0.0), atr)
+            if getattr(features, "ema_fast", None) is not None
+            else "unavailable",
+            "feature_ema_slow_distance_atr": _ratio_or_unavailable(current["close"] - getattr(features, "ema_slow", 0.0), atr)
+            if getattr(features, "ema_slow", None) is not None
+            else "unavailable",
+            "feature_ema_slope_atr": _ema_slope_atr(history, atr),
+            "feature_recent_range_compression": _recent_range_compression(history, atr),
+            "feature_recent_high_distance_atr": _recent_extreme_distance_atr(history, atr, high=True),
+            "feature_recent_low_distance_atr": _recent_extreme_distance_atr(history, atr, high=False),
+            "feature_volume_ratio": _volume_ratio(history),
+            "feature_trades_today_before_entry": gate_state.trades_by_day.get(day_key, 0),
+            "feature_realized_pnl_today_before_entry": gate_state.pnl_by_day.get(day_key, 0.0),
+            "feature_bars_since_previous_exit": index - gate_state.last_exit_index
+            if gate_state.last_exit_index is not None
+            else "unavailable",
+            "feature_previous_trade_was_loss": bool(
+                gate_state.last_trade_net_pnl is not None and gate_state.last_trade_net_pnl < 0
+            ),
+        }
+        snapshot.update(
+            _context_feature_snapshot(
+                self.context_bars,
+                self.context_close_timestamps,
+                current["ts"],
+            )
+        )
+        return snapshot
 
     def _research_gate_reason(
         self,
@@ -419,7 +534,7 @@ class BacktestEngine:
         gate_state.trades_by_day[day_key] = gate_state.trades_by_day.get(day_key, 0) + 1
         gate_state.pnl_by_day[day_key] = gate_state.pnl_by_day.get(day_key, 0.0) + trade.net_pnl
         gate_state.last_exit_time = trade.exit_time
-        gate_state.last_trade_index = index
+        gate_state.last_exit_index = index + trade.holding_bars
         gate_state.last_trade_net_pnl = trade.net_pnl
         cooldown = gates.cooldown_bars_after_trade
         if trade.net_pnl < 0:
@@ -456,6 +571,22 @@ def _write_csv_rows(
         writer = csv.DictWriter(file, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(rows)
+
+
+def _write_dynamic_csv_rows(path: Path, rows: Sequence[Mapping[str, object]]) -> None:
+    base_fields = [
+        "trade_id",
+        "symbol",
+        "side",
+        "entry_time",
+        "entry_index",
+        "score",
+        "net_pnl",
+        "gross_pnl",
+        "total_cost",
+    ]
+    dynamic_fields = sorted({key for row in rows for key in row if key not in base_fields})
+    _write_csv_rows(path, [*base_fields, *dynamic_fields], rows)
 
 
 def _write_metric_csv(
@@ -550,6 +681,122 @@ def score_bucket_pnl(trades: Sequence[BacktestTrade]) -> list[dict[str, object]]
     return rows
 
 
+def entry_feature_snapshots(trades: Sequence[BacktestTrade]) -> list[dict[str, object]]:
+    """Return one deterministic feature row per completed trade."""
+
+    rows: list[dict[str, object]] = []
+    for trade in trades:
+        feature_values = {
+            key: value for key, value in trade.metadata.items() if key.startswith("feature_")
+        }
+        rows.append(
+            {
+                "trade_id": trade.trade_id,
+                "symbol": trade.symbol,
+                "side": trade.side.value,
+                "entry_time": trade.entry_time.isoformat(),
+                "entry_index": trade.metadata.get("index", "unavailable"),
+                "score": trade.score,
+                "net_pnl": trade.net_pnl,
+                "gross_pnl": trade.gross_pnl,
+                "total_cost": trade.total_cost,
+                **feature_values,
+            }
+        )
+    return rows
+
+
+def feature_bucket_pnl(trades: Sequence[BacktestTrade]) -> list[dict[str, object]]:
+    """Return PnL grouped by high-signal diagnostic feature buckets."""
+
+    bucket_extractors = {
+        "atr_percentile": lambda trade: _numeric_bucket(
+            trade.metadata.get("feature_atr_percentile"), [0.25, 0.5, 0.75]
+        ),
+        "candle_body_ratio": lambda trade: _numeric_bucket(
+            trade.metadata.get("feature_candle_body_range_ratio"), [0.25, 0.5, 0.75]
+        ),
+        "breakout_distance_atr": lambda trade: _numeric_bucket(
+            trade.metadata.get("feature_breakout_distance_atr"), [0.25, 0.5, 1.0]
+        ),
+        "m15_ema_slope": lambda trade: _direction_bucket(
+            trade.metadata.get("feature_ema_slope_atr")
+        ),
+        "h1_trend_alignment": lambda trade: str(
+            trade.metadata.get("feature_context_H1_trend_alignment", "unavailable")
+        ),
+        "h4_trend_alignment": lambda trade: str(
+            trade.metadata.get("feature_context_H4_trend_alignment", "unavailable")
+        ),
+        "d1_trend_alignment": lambda trade: str(
+            trade.metadata.get("feature_context_D1_trend_alignment", "unavailable")
+        ),
+    }
+    rows: list[dict[str, object]] = []
+    for feature, extractor in bucket_extractors.items():
+        grouped: dict[str, list[BacktestTrade]] = defaultdict(list)
+        for trade in trades:
+            grouped[extractor(trade)].append(trade)
+        for bucket in sorted(grouped):
+            rows.append({"feature": feature, "bucket": bucket, **_trade_group_metrics(grouped[bucket])})
+    return rows
+
+
+def regime_bucket_summary(trades: Sequence[BacktestTrade]) -> list[dict[str, object]]:
+    """Return coarser combined-regime buckets for quick research triage."""
+
+    grouped: dict[str, list[BacktestTrade]] = defaultdict(list)
+    for trade in trades:
+        atr_bucket = _numeric_bucket(trade.metadata.get("feature_atr_percentile"), [0.25, 0.5, 0.75])
+        candle_bucket = _numeric_bucket(
+            trade.metadata.get("feature_candle_body_range_ratio"), [0.25, 0.5, 0.75]
+        )
+        h1 = trade.metadata.get("feature_context_H1_trend_alignment", "unavailable")
+        regime = f"atr={atr_bucket}|body={candle_bucket}|h1={h1}"
+        grouped[regime].append(trade)
+    return [
+        {"regime": regime, **_trade_group_metrics(regime_trades)}
+        for regime, regime_trades in sorted(grouped.items())
+    ]
+
+
+def worst_day_attribution(trades: Sequence[BacktestTrade]) -> list[dict[str, object]]:
+    """Return days with realized net losses and dominant diagnostic buckets."""
+
+    grouped: dict[str, list[BacktestTrade]] = defaultdict(list)
+    for trade in trades:
+        grouped[trade.exit_time.date().isoformat()].append(trade)
+    rows: list[dict[str, object]] = []
+    for day, day_trades in sorted(grouped.items()):
+        net_pnl = sum(trade.net_pnl for trade in day_trades)
+        if net_pnl >= 0:
+            continue
+        atr_buckets = Counter(
+            _numeric_bucket(trade.metadata.get("feature_atr_percentile"), [0.25, 0.5, 0.75])
+            for trade in day_trades
+        )
+        candle_buckets = Counter(
+            _numeric_bucket(
+                trade.metadata.get("feature_candle_body_range_ratio"), [0.25, 0.5, 0.75]
+            )
+            for trade in day_trades
+        )
+        context_available = any(
+            bool(trade.metadata.get("feature_context_H1_available", False)) for trade in day_trades
+        )
+        rows.append(
+            {
+                "day": day,
+                "trade_count": len(day_trades),
+                "net_pnl": net_pnl,
+                "dominant_atr_bucket": atr_buckets.most_common(1)[0][0],
+                "dominant_candle_body_bucket": candle_buckets.most_common(1)[0][0],
+                "context_available": context_available,
+            }
+        )
+    return sorted(rows, key=lambda row: row["net_pnl"] if isinstance(row["net_pnl"], int | float) else 0.0)
+
+
 def _period_trade_summary(
     trades: Sequence[BacktestTrade],
     *,
@@ -613,6 +860,209 @@ def _repeated_level_trade_count(trades: Sequence[BacktestTrade]) -> int:
 
 def _counter_string(counter: Counter[Any]) -> str:
     return ";".join(f"{key}:{counter[key]}" for key in sorted(counter, key=str))
+
+
+def _trade_group_metrics(trades: Sequence[BacktestTrade]) -> dict[str, object]:
+    net_pnl = sum(trade.net_pnl for trade in trades)
+    wins = sum(1 for trade in trades if trade.net_pnl > 0)
+    gross_profit = sum(trade.net_pnl for trade in trades if trade.net_pnl > 0)
+    gross_loss = abs(sum(trade.net_pnl for trade in trades if trade.net_pnl < 0))
+    return {
+        "trade_count": len(trades),
+        "net_pnl": net_pnl,
+        "average_trade": net_pnl / len(trades) if trades else 0.0,
+        "win_rate": wins / len(trades) if trades else 0.0,
+        "profit_factor": gross_profit / gross_loss if gross_loss > 0 else "unavailable",
+    }
+
+
+def _numeric_bucket(value: object, cuts: Sequence[float]) -> str:
+    if not isinstance(value, int | float):
+        return "unavailable"
+    lower = "-inf"
+    for cut in cuts:
+        if float(value) <= cut:
+            return f"{lower}..{cut}"
+        lower = str(cut)
+    return f">{cuts[-1]}" if cuts else "available"
+
+
+def _direction_bucket(value: object) -> str:
+    if not isinstance(value, int | float):
+        return "unavailable"
+    if value > 0:
+        return "positive"
+    if value < 0:
+        return "negative"
+    return "flat"
+
+
+def _safe_positive_float(value: object) -> float | None:
+    if not isinstance(value, int | float):
+        return None
+    numeric = float(value)
+    return numeric if numeric > 0 else None
+
+
+def _value_or_unavailable(value: object) -> float | int | str:
+    return value if isinstance(value, int | float) else "unavailable"
+
+
+def _ratio_or_unavailable(numerator: float, denominator: float | None) -> float | str:
+    return numerator / denominator if denominator else "unavailable"
+
+
+def _true_range(bar: Bar, previous_close: float | None = None) -> float:
+    true_range = bar["high"] - bar["low"]
+    if previous_close is not None:
+        true_range = max(true_range, abs(bar["high"] - previous_close), abs(bar["low"] - previous_close))
+    return true_range
+
+
+def _atr_from_bars(bars: Sequence[Bar], period: int = 14) -> float | None:
+    if not bars:
+        return None
+    ranges: list[float] = []
+    previous_close: float | None = None
+    for bar in bars[-period:]:
+        ranges.append(_true_range(bar, previous_close))
+        previous_close = bar["close"]
+    return sum(ranges) / len(ranges) if ranges else None
+
+
+def _atr_percentile(
+    history: Sequence[Bar],
+    current_atr: float | None,
+    *,
+    atr_period: int = 14,
+    rank_window: int = 100,
+) -> float | str:
+    if current_atr is None or len(history) < atr_period:
+        return "unavailable"
+    sample = history[-(rank_window + atr_period) :]
+    atr_values = [
+        atr
+        for index in range(atr_period, len(sample) + 1)
+        if (atr := _atr_from_bars(sample[:index], period=atr_period)) is not None
+    ]
+    if not atr_values:
+        return "unavailable"
+    return sum(1 for value in atr_values if value <= current_atr) / len(atr_values)
+
+
+def _ema(values: Sequence[float], period: int) -> float | None:
+    if not values:
+        return None
+    smoothing = 2 / (period + 1)
+    ema = values[0]
+    for value in values[1:]:
+        ema = value * smoothing + ema * (1 - smoothing)
+    return ema
+
+
+def _ema_slope_atr(history: Sequence[Bar], atr: float | None, period: int = 20, lag: int = 5) -> float | str:
+    if atr is None or len(history) <= lag:
+        return "unavailable"
+    closes = [bar["close"] for bar in history]
+    current = _ema(closes, period)
+    previous = _ema(closes[:-lag], period)
+    if current is None or previous is None:
+        return "unavailable"
+    return (current - previous) / atr
+
+
+def _recent_range_compression(history: Sequence[Bar], atr: float | None, lookback: int = 20) -> float | str:
+    if atr is None or not history:
+        return "unavailable"
+    recent = history[-lookback:]
+    span = max(bar["high"] for bar in recent) - min(bar["low"] for bar in recent)
+    return span / atr
+
+
+def _recent_extreme_distance_atr(
+    history: Sequence[Bar], atr: float | None, *, high: bool, lookback: int = 20
+) -> float | str:
+    if atr is None or not history:
+        return "unavailable"
+    recent = history[-lookback:]
+    current_close = history[-1]["close"]
+    extreme = max(bar["high"] for bar in recent) if high else min(bar["low"] for bar in recent)
+    return (current_close - extreme) / atr
+
+
+def _volume_ratio(history: Sequence[Bar], lookback: int = 20) -> float | str:
+    if len(history) < 2:
+        return "unavailable"
+    recent = history[-lookback - 1 : -1]
+    average = sum(bar["volume"] for bar in recent) / len(recent) if recent else 0.0
+    return history[-1]["volume"] / average if average > 0 else "unavailable"
+
+
+def _timeframe_seconds(timeframe: str) -> int:
+    mapping = {
+        "M1": 60,
+        "M5": 300,
+        "M15": 900,
+        "M30": 1800,
+        "H1": 3600,
+        "H4": 14400,
+        "D1": 86400,
+        "1": 60,
+        "5": 300,
+        "15": 900,
+        "30": 1800,
+        "60": 3600,
+        "240": 14400,
+        "D": 86400,
+    }
+    return mapping.get(timeframe.upper(), 0)
+
+
+def _bar_close_time(bar: Bar) -> datetime:
+    return bar["ts"] + timedelta(seconds=_timeframe_seconds(bar["timeframe"]))
+
+
+def _context_feature_snapshot(
+    context_bars: Mapping[str, Sequence[Bar]],
+    context_timestamps: Mapping[str, Sequence[datetime]],
+    entry_time: datetime,
+) -> dict[str, float | int | str | bool]:
+    result: dict[str, float | int | str | bool] = {}
+    for timeframe in ("H1", "H4", "D1"):
+        prefix = f"feature_context_{timeframe}"
+        bars = context_bars.get(timeframe, ())
+        timestamps = context_timestamps.get(timeframe, ())
+        closed_end = bisect_right(timestamps, entry_time)
+        closed = bars[max(0, closed_end - 250) : closed_end]
+        if not closed:
+            result[f"{prefix}_available"] = False
+            result[f"{prefix}_reason"] = "not_supplied_or_no_closed_bar"
+            result[f"{prefix}_trend_alignment"] = "unavailable"
+            continue
+        closes = [bar["close"] for bar in closed]
+        ema_fast = _ema(closes, 50)
+        ema_slow = _ema(closes, 200)
+        atr = _atr_from_bars(closed)
+        slope = _ema_slope_atr(closed, atr)
+        trend_alignment = "unavailable"
+        if ema_fast is not None and ema_slow is not None:
+            trend_alignment = "long" if ema_fast > ema_slow else "short_or_flat"
+        result.update(
+            {
+                f"{prefix}_available": True,
+                f"{prefix}_timestamp": closed[-1]["ts"].isoformat(),
+                f"{prefix}_trend_alignment": trend_alignment,
+                f"{prefix}_ema_fast_distance_atr": _ratio_or_unavailable(closed[-1]["close"] - ema_fast, atr)
+                if ema_fast is not None
+                else "unavailable",
+                f"{prefix}_ema_slow_distance_atr": _ratio_or_unavailable(closed[-1]["close"] - ema_slow, atr)
+                if ema_slow is not None
+                else "unavailable",
+                f"{prefix}_ema_slope_atr": slope,
+                f"{prefix}_atr": atr if atr is not None else "unavailable",
+            }
+        )
+    return result
 
 
 def build_report(
@@ -820,6 +1270,28 @@ def _drawdown_curve(
         drawdown = (equity - peak) / peak if peak else 0.0
         drawdowns.append({"timestamp": str(point["timestamp"]), "drawdown": drawdown})
     return drawdowns
+
+
+def _report_without_feature_metadata(report: BacktestReport) -> BacktestReport:
+    """Return a report copy with feature-heavy trade metadata stripped from JSON payload.
+
+    Feature diagnostics are exported as dedicated CSV artifacts; the main report JSON keeps
+    only compact non-feature metadata such as level price and entry index.
+    """
+
+    slim_trades = [
+        trade.model_copy(
+            update={
+                "metadata": {
+                    key: value
+                    for key, value in trade.metadata.items()
+                    if not key.startswith("feature_")
+                }
+            }
+        )
+        for trade in report.trades
+    ]
+    return report.model_copy(update={"trades": slim_trades})
 
 
 def _normalize(value: Any) -> Any:
