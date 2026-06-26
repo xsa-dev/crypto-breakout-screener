@@ -393,6 +393,17 @@ class BacktestCostModel(BaseModel):
     acceptance_quality: bool = True
 
 
+class BacktestResearchGateConfig(BaseModel):
+    """Disabled-by-default local research gates for backtest overtrading diagnostics."""
+
+    min_entry_score: int | None = Field(default=None, ge=0, le=100)
+    cooldown_bars_after_trade: int = Field(default=0, ge=0)
+    cooldown_bars_after_loss: int = Field(default=0, ge=0)
+    block_immediate_reentry: bool = False
+    max_trades_per_day: int | None = Field(default=None, ge=1)
+    daily_stop_loss: float | None = Field(default=None, gt=0)
+
+
 class BacktestConfig(BaseModel):
     """Deterministic local backtest configuration."""
 
@@ -402,6 +413,7 @@ class BacktestConfig(BaseModel):
     min_warmup_bars: int = Field(default=20, ge=1)
     random_seed: int = 0
     cost_model: BacktestCostModel = Field(default_factory=BacktestCostModel)
+    research_gates: BacktestResearchGateConfig = Field(default_factory=BacktestResearchGateConfig)
     strategy: BreakoutStrategyConfig = Field(default_factory=BreakoutStrategyConfig)
     export_parquet: bool = False
 

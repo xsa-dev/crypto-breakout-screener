@@ -74,7 +74,11 @@ def test_crypto_runner_writes_manifest_report_artifacts_and_omits_private_env(
     assert first.bar_count == 12
     assert first.trade_count >= 1
     assert first.manifest_path.exists()
-    assert len(first.artifact_paths) == 12
+    assert len(first.artifact_paths) == 16
+    assert any(path.endswith("-daily-summary.csv") for path in first.artifact_paths)
+    assert any(path.endswith("-weekly-summary.csv") for path in first.artifact_paths)
+    assert any(path.endswith("-lifecycle-diagnostics.csv") for path in first.artifact_paths)
+    assert any(path.endswith("-score-bucket-pnl.csv") for path in first.artifact_paths)
     assert first.artifact_paths[-1].endswith("-dataset-manifest.json")
 
     manifest_text = first.manifest_path.read_text(encoding="utf-8")

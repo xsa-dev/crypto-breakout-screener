@@ -4,7 +4,9 @@ import csv
 import hashlib
 import json
 import random
+from collections import Counter, defaultdict
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
@@ -33,6 +35,19 @@ from src.core.models import (
     RiskState,
 )
 from src.core.schemas import Bar
+
+
+@dataclass
+class ResearchGateState:
+    """Mutable local state for disabled-by-default research entry gates."""
+
+    last_exit_time: datetime | None = None
+    last_trade_index: int | None = None
+    last_trade_net_pnl: float | None = None
+    cooldown_until_index: int = -1
+    trades_by_day: dict[str, int] = field(default_factory=dict)
+    pnl_by_day: dict[str, float] = field(default_factory=dict)
+    skip_counts: Counter[str] = field(default_factory=Counter)
 
 
 class BacktestEngine:
@@ -67,16 +82,25 @@ class BacktestEngine:
             {"timestamp": ordered[0]["ts"].isoformat(), "equity": equity}
         ]
         unavailable: dict[str, str] = {}
+        gate_state = ResearchGateState()
 
         for index in range(self.config.min_warmup_bars, len(ordered) - 1):
             history = ordered[: index + 1]
             current = ordered[index]
             next_bar = ordered[index + 1]
-            trade = self._evaluate_closed_bar(history, current, next_bar, index, config_hash)
+            trade = self._evaluate_closed_bar(
+                history,
+                current,
+                next_bar,
+                index,
+                config_hash,
+                gate_state,
+            )
             if trade is None:
                 equity_curve.append({"timestamp": current["ts"].isoformat(), "equity": equity})
                 continue
             trades.append(trade)
+            self._update_gate_state(gate_state, trade=trade, index=index)
             equity += trade.net_pnl
             equity_curve.append({"timestamp": trade.exit_time.isoformat(), "equity": equity})
 
@@ -96,6 +120,7 @@ class BacktestEngine:
             windows=windows,
             monte_carlo=monte_carlo,
             unavailable_reasons=unavailable,
+            gate_skip_counts=dict(gate_state.skip_counts),
         )
 
     def monte_carlo(
@@ -142,6 +167,10 @@ class BacktestEngine:
         score_path = directory / f"{report.run_id}-score-distribution.csv"
         false_breakout_path = directory / f"{report.run_id}-false-breakout-analysis.csv"
         slippage_path = directory / f"{report.run_id}-slippage-report.csv"
+        daily_summary_path = directory / f"{report.run_id}-daily-summary.csv"
+        weekly_summary_path = directory / f"{report.run_id}-weekly-summary.csv"
+        lifecycle_path = directory / f"{report.run_id}-lifecycle-diagnostics.csv"
+        score_bucket_pnl_path = directory / f"{report.run_id}-score-bucket-pnl.csv"
         parameters_path = directory / f"{report.run_id}-parameters.json"
 
         report_path.write_text(
@@ -193,6 +222,42 @@ class BacktestEngine:
         _write_metric_csv(score_path, "bucket", report.score_distribution, value_name="count")
         _write_metric_csv(false_breakout_path, "metric", report.false_breakout_analysis)
         _write_metric_csv(slippage_path, "metric", report.slippage_report)
+        _write_csv_rows(
+            daily_summary_path,
+            [
+                "day",
+                "trade_count",
+                "net_pnl",
+                "gross_pnl",
+                "total_cost",
+                "win_count",
+                "loss_count",
+                "win_rate",
+                "max_loss_streak_inside_period",
+            ],
+            daily_trade_summary(report.trades),
+        )
+        _write_csv_rows(
+            weekly_summary_path,
+            [
+                "week",
+                "trade_count",
+                "net_pnl",
+                "gross_pnl",
+                "total_cost",
+                "win_count",
+                "loss_count",
+                "win_rate",
+                "max_loss_streak_inside_period",
+            ],
+            weekly_trade_summary(report.trades),
+        )
+        _write_metric_csv(lifecycle_path, "metric", lifecycle_diagnostics(report))
+        _write_csv_rows(
+            score_bucket_pnl_path,
+            ["score", "trade_count", "net_pnl", "average_trade", "win_rate"],
+            score_bucket_pnl(report.trades),
+        )
         parameters_path.write_text(
             json.dumps(report.parameter_snapshot, sort_keys=True, indent=2, ensure_ascii=False),
             encoding="utf-8",
@@ -209,6 +274,10 @@ class BacktestEngine:
             str(score_path),
             str(false_breakout_path),
             str(slippage_path),
+            str(daily_summary_path),
+            str(weekly_summary_path),
+            str(lifecycle_path),
+            str(score_bucket_pnl_path),
             str(parameters_path),
         ]
         return report.model_copy(update={"artifact_paths": paths})
@@ -220,6 +289,7 @@ class BacktestEngine:
         next_bar: Bar,
         index: int,
         config_hash: str,
+        gate_state: ResearchGateState,
     ) -> BacktestTrade | None:
         levels = self.level_engine.detect_pivots(list(history), as_of_index=len(history) - 1)
         pivot_highs = [level for level in levels if level.price < current["close"]]
@@ -228,6 +298,15 @@ class BacktestEngine:
         level = pivot_highs[-1]
         features = self.setup_evaluator.calculate_features(list(history), side=Side.LONG)
         score = self.setup_evaluator.score(features, side=Side.LONG)
+        score_blocker = self._research_gate_reason(
+            gate_state,
+            current=current,
+            index=index,
+            score=score.total,
+        )
+        if score_blocker is not None:
+            gate_state.skip_counts[score_blocker] += 1
+            return None
         stop_price = current["close"] - self.config.stop_distance
         market = MarketSnapshot(
             symbol=current["symbol"],
@@ -304,6 +383,50 @@ class BacktestEngine:
             metadata={"level_price": level_price, "index": index},
         )
 
+    def _research_gate_reason(
+        self,
+        gate_state: ResearchGateState,
+        *,
+        current: Bar,
+        index: int,
+        score: int,
+    ) -> str | None:
+        gates = self.config.research_gates
+        if gates.min_entry_score is not None and score < gates.min_entry_score:
+            return "skipped_min_entry_score"
+        if index <= gate_state.cooldown_until_index:
+            return "skipped_cooldown"
+        if gates.block_immediate_reentry and gate_state.last_exit_time == current["ts"]:
+            return "skipped_immediate_reentry"
+        day_key = current["ts"].date().isoformat()
+        if gates.max_trades_per_day is not None:
+            if gate_state.trades_by_day.get(day_key, 0) >= gates.max_trades_per_day:
+                return "skipped_max_trades_per_day"
+        if gates.daily_stop_loss is not None:
+            if gate_state.pnl_by_day.get(day_key, 0.0) <= -gates.daily_stop_loss:
+                return "skipped_daily_stop_loss"
+        return None
+
+    def _update_gate_state(
+        self,
+        gate_state: ResearchGateState,
+        *,
+        trade: BacktestTrade,
+        index: int,
+    ) -> None:
+        gates = self.config.research_gates
+        day_key = trade.exit_time.date().isoformat()
+        gate_state.trades_by_day[day_key] = gate_state.trades_by_day.get(day_key, 0) + 1
+        gate_state.pnl_by_day[day_key] = gate_state.pnl_by_day.get(day_key, 0.0) + trade.net_pnl
+        gate_state.last_exit_time = trade.exit_time
+        gate_state.last_trade_index = index
+        gate_state.last_trade_net_pnl = trade.net_pnl
+        cooldown = gates.cooldown_bars_after_trade
+        if trade.net_pnl < 0:
+            cooldown = max(cooldown, gates.cooldown_bars_after_loss)
+        if cooldown > 0:
+            gate_state.cooldown_until_index = max(gate_state.cooldown_until_index, index + cooldown)
+
     def _validation_windows(self, bar_count: int) -> list[BacktestWindow]:
         split = max(self.config.min_warmup_bars, bar_count // 2)
         return [
@@ -349,6 +472,149 @@ def _write_metric_csv(
     _write_csv_rows(path, [key_name, value_name], rows)
 
 
+def daily_trade_summary(trades: Sequence[BacktestTrade]) -> list[dict[str, object]]:
+    """Return deterministic per-UTC-day trade grouping diagnostics."""
+
+    return _period_trade_summary(trades, period="day")
+
+
+def weekly_trade_summary(trades: Sequence[BacktestTrade]) -> list[dict[str, object]]:
+    """Return deterministic per-ISO-week trade grouping diagnostics."""
+
+    return _period_trade_summary(trades, period="week")
+
+
+def lifecycle_diagnostics(report: BacktestReport) -> dict[str, object]:
+    """Summarize lifecycle/overtrading diagnostics for a completed report."""
+
+    trades = report.trades
+    holding_values = [trade.holding_bars for trade in trades]
+    daily_counts = Counter(trade.entry_time.date().isoformat() for trade in trades)
+    immediate_reentries = 0
+    previous_exit: datetime | None = None
+    for trade in trades:
+        if previous_exit is not None and trade.entry_time == previous_exit:
+            immediate_reentries += 1
+        previous_exit = trade.exit_time
+    side_distribution = Counter(trade.side.value for trade in trades)
+    holding_distribution = Counter(holding_values)
+    scores = [trade.score for trade in trades]
+    total_bars = report.metrics.get("bar_count")
+    bar_count = int(total_bars) if isinstance(total_bars, int | float) else None
+    diagnostics: dict[str, object] = {
+        "total_trades": len(trades),
+        "total_bars": bar_count if bar_count is not None else "unavailable",
+        "trades_per_bar": len(trades) / bar_count if bar_count else None,
+        "holding_bars_min": min(holding_values) if holding_values else 0,
+        "holding_bars_max": max(holding_values) if holding_values else 0,
+        "holding_bars_average": sum(holding_values) / len(holding_values) if holding_values else 0.0,
+        "holding_bars_distribution": _counter_string(holding_distribution),
+        "immediate_reentry_count": immediate_reentries,
+        "immediate_reentry_ratio": immediate_reentries / max(len(trades) - 1, 1) if trades else 0.0,
+        "same_day_max_trades": max(daily_counts.values()) if daily_counts else 0,
+        "average_daily_trades": sum(daily_counts.values()) / len(daily_counts) if daily_counts else 0.0,
+        "max_losing_streak": _max_losing_streak(trades),
+        "side_distribution": _counter_string(side_distribution),
+        "entry_score_min": min(scores) if scores else 0,
+        "entry_score_max": max(scores) if scores else 0,
+        "entry_score_average": sum(scores) / len(scores) if scores else 0.0,
+        "repeated_level_trade_count": _repeated_level_trade_count(trades),
+    }
+    skip_counts = report.parameter_snapshot.get("research_gate_skip_counts", {})
+    if isinstance(skip_counts, Mapping):
+        for key, value in sorted(skip_counts.items()):
+            diagnostics[f"gate_{key}"] = value
+    return diagnostics
+
+
+def score_bucket_pnl(trades: Sequence[BacktestTrade]) -> list[dict[str, object]]:
+    """Return PnL grouped by exact score for score-quality diagnostics."""
+
+    grouped: dict[int, list[BacktestTrade]] = defaultdict(list)
+    for trade in trades:
+        grouped[trade.score].append(trade)
+    rows: list[dict[str, object]] = []
+    for score in sorted(grouped):
+        score_trades = grouped[score]
+        net_pnl = sum(trade.net_pnl for trade in score_trades)
+        wins = sum(1 for trade in score_trades if trade.net_pnl > 0)
+        rows.append(
+            {
+                "score": score,
+                "trade_count": len(score_trades),
+                "net_pnl": net_pnl,
+                "average_trade": net_pnl / len(score_trades),
+                "win_rate": wins / len(score_trades),
+            }
+        )
+    return rows
+
+
+def _period_trade_summary(
+    trades: Sequence[BacktestTrade],
+    *,
+    period: Literal["day", "week"],
+) -> list[dict[str, object]]:
+    grouped: dict[str, list[BacktestTrade]] = defaultdict(list)
+    for trade in trades:
+        if period == "day":
+            key = trade.entry_time.date().isoformat()
+        else:
+            calendar = trade.entry_time.isocalendar()
+            key = f"{calendar.year}-W{calendar.week:02d}"
+        grouped[key].append(trade)
+    rows: list[dict[str, object]] = []
+    key_name = "day" if period == "day" else "week"
+    for key in sorted(grouped):
+        period_trades = grouped[key]
+        wins = [trade for trade in period_trades if trade.net_pnl > 0]
+        losses = [trade for trade in period_trades if trade.net_pnl < 0]
+        rows.append(
+            {
+                key_name: key,
+                "trade_count": len(period_trades),
+                "net_pnl": sum(trade.net_pnl for trade in period_trades),
+                "gross_pnl": sum(trade.gross_pnl for trade in period_trades),
+                "total_cost": sum(trade.total_cost for trade in period_trades),
+                "win_count": len(wins),
+                "loss_count": len(losses),
+                "win_rate": len(wins) / len(period_trades),
+                "max_loss_streak_inside_period": _max_losing_streak(period_trades),
+            }
+        )
+    return rows
+
+
+def _max_losing_streak(trades: Sequence[BacktestTrade]) -> int:
+    current = 0
+    maximum = 0
+    for trade in trades:
+        if trade.net_pnl < 0:
+            current += 1
+            maximum = max(maximum, current)
+        else:
+            current = 0
+    return maximum
+
+
+def _repeated_level_trade_count(trades: Sequence[BacktestTrade]) -> int:
+    seen: set[str] = set()
+    repeated = 0
+    for trade in trades:
+        level_price = trade.metadata.get("level_price")
+        if level_price is None:
+            continue
+        key = f"{trade.symbol}:{trade.side.value}:{float(level_price):.8f}"
+        if key in seen:
+            repeated += 1
+        seen.add(key)
+    return repeated
+
+
+def _counter_string(counter: Counter[Any]) -> str:
+    return ";".join(f"{key}:{counter[key]}" for key in sorted(counter, key=str))
+
+
 def build_report(
     *,
     run_id: str,
@@ -361,12 +627,16 @@ def build_report(
     windows: Sequence[BacktestWindow],
     monte_carlo: MonteCarloResult,
     unavailable_reasons: Mapping[str, str] | None = None,
+    gate_skip_counts: Mapping[str, int] | None = None,
 ) -> BacktestReport:
     """Build metrics and diagnostic payloads from simulated trades."""
 
     metrics, metric_unavailable = _metrics(config.initial_equity, equity_curve, trades)
+    metrics["bar_count"] = len(bars)
     unavailable = dict(metric_unavailable)
     unavailable.update(unavailable_reasons or {})
+    parameter_snapshot = config.model_dump(mode="json")
+    parameter_snapshot["research_gate_skip_counts"] = dict(sorted((gate_skip_counts or {}).items()))
     scenario_breakdown: dict[str, int] = {}
     score_distribution: dict[str, int] = {}
     false_breakouts = 0
@@ -385,7 +655,7 @@ def build_report(
         config_hash=config_hash,
         dataset_hash=dataset_hash,
         time_range=(bars[0]["ts"], bars[-1]["ts"]),
-        parameter_snapshot=config.model_dump(mode="json"),
+        parameter_snapshot=parameter_snapshot,
         metrics=metrics,
         unavailable_reasons=unavailable,
         equity_curve=equity_curve,

@@ -25,7 +25,13 @@ from pydantic import BaseModel, Field
 from src.app.breakout.backtesting import BacktestEngine, stable_hash
 from src.app.breakout.normalizer import Normalizer, to_utc
 from src.core.enums import TimeFrame
-from src.core.models import BacktestConfig, BacktestCostModel, BreakoutStrategyConfig, ScoreConfig
+from src.core.models import (
+    BacktestConfig,
+    BacktestCostModel,
+    BacktestResearchGateConfig,
+    BreakoutStrategyConfig,
+    ScoreConfig,
+)
 from src.core.schemas import Bar, FeedGap
 
 DEFAULT_CONTEXT_TIMEFRAMES = (TimeFrame.H1.value, TimeFrame.H4.value, TimeFrame.D1.value)
@@ -268,6 +274,7 @@ def run_crypto_experiment(
     stop_distance: float = 2.0,
     min_warmup_bars: int = 7,
     random_seed: int = 42,
+    research_gates: BacktestResearchGateConfig | None = None,
 ) -> CryptoExperimentResult:
     """Run the first BTCUSDT crypto historical experiment and write local artifacts."""
 
@@ -306,6 +313,7 @@ def run_crypto_experiment(
             slippage_per_unit=slippage,
             funding_per_bar=funding_per_bar,
         ),
+        research_gates=research_gates or BacktestResearchGateConfig(),
         strategy=BreakoutStrategyConfig(
             symbols=[symbol],
             execution_timeframe=TimeFrame.M15,

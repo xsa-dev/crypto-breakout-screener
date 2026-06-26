@@ -5,10 +5,19 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from pydantic import ValidationError
 
-from src.app.breakout.backtesting import BacktestEngine, evaluate_production_oos_gate, stable_hash
+from src.app.breakout.backtesting import (
+    BacktestEngine,
+    daily_trade_summary,
+    evaluate_production_oos_gate,
+    lifecycle_diagnostics,
+    score_bucket_pnl,
+    stable_hash,
+    weekly_trade_summary,
+)
 from src.core.models import (
     BacktestConfig,
     BacktestCostModel,
+    BacktestResearchGateConfig,
     BreakoutStrategyConfig,
     ProductionOosThresholds,
     ScoreConfig,
@@ -129,6 +138,10 @@ def test_report_contains_required_metrics_diagnostics_windows_and_exports(tmp_pa
         f"{report.run_id}-score-distribution.csv",
         f"{report.run_id}-false-breakout-analysis.csv",
         f"{report.run_id}-slippage-report.csv",
+        f"{report.run_id}-daily-summary.csv",
+        f"{report.run_id}-weekly-summary.csv",
+        f"{report.run_id}-lifecycle-diagnostics.csv",
+        f"{report.run_id}-score-bucket-pnl.csv",
         f"{report.run_id}-parameters.json",
     ]
     assert [path.split("/")[-1] for path in exported.artifact_paths] == expected_names
@@ -148,6 +161,36 @@ def test_report_contains_required_metrics_diagnostics_windows_and_exports(tmp_pa
     with (tmp_path / f"{report.run_id}-parameters.json").open(encoding="utf-8") as file:
         parameters = json.load(file)
     assert parameters == report.parameter_snapshot
+
+    with (tmp_path / f"{report.run_id}-lifecycle-diagnostics.csv").open(
+        newline="",
+        encoding="utf-8",
+    ) as file:
+        lifecycle = {row["metric"]: row["value"] for row in csv.DictReader(file)}
+    assert lifecycle["total_trades"] == str(len(report.trades))
+    assert lifecycle["immediate_reentry_count"] == "2"
+    assert lifecycle["holding_bars_distribution"] == "1:3"
+
+    with (tmp_path / f"{report.run_id}-daily-summary.csv").open(
+        newline="",
+        encoding="utf-8",
+    ) as file:
+        daily_rows = list(csv.DictReader(file))
+    assert daily_rows[0]["trade_count"] == str(len(report.trades))
+
+    with (tmp_path / f"{report.run_id}-weekly-summary.csv").open(
+        newline="",
+        encoding="utf-8",
+    ) as file:
+        weekly_rows = list(csv.DictReader(file))
+    assert weekly_rows[0]["trade_count"] == str(len(report.trades))
+
+    with (tmp_path / f"{report.run_id}-score-bucket-pnl.csv").open(
+        newline="",
+        encoding="utf-8",
+    ) as file:
+        score_rows = list(csv.DictReader(file))
+    assert score_rows
 
     second_export = BacktestEngine(config()).export_report(report, tmp_path)
     assert second_export.artifact_paths == exported.artifact_paths
@@ -223,3 +266,96 @@ def test_production_oos_gate_blocks_missing_or_unavailable_metrics() -> None:
     assert unavailable_decision.approved is False
     assert unavailable_decision.reason == "oos_metric_unavailable"
     assert unavailable_decision.blockers == ["profit_factor_unavailable"]
+
+def test_lifecycle_diagnostic_helpers_group_reentries_and_scores() -> None:
+    report = BacktestEngine(config()).run(breakout_dataset())
+
+    diagnostics = lifecycle_diagnostics(report)
+    assert diagnostics["total_trades"] == len(report.trades)
+    assert diagnostics["immediate_reentry_count"] == max(0, len(report.trades) - 1)
+    assert diagnostics["holding_bars_distribution"] == "1:3"
+    assert diagnostics["side_distribution"] == "long:3"
+
+    daily_rows = daily_trade_summary(report.trades)
+    weekly_rows = weekly_trade_summary(report.trades)
+    score_rows = score_bucket_pnl(report.trades)
+    assert daily_rows[0]["trade_count"] == len(report.trades)
+    assert weekly_rows[0]["trade_count"] == len(report.trades)
+    assert sum(int(row["trade_count"]) for row in score_rows) == len(report.trades)
+
+
+def test_default_research_gates_are_noop() -> None:
+    bars = breakout_dataset()
+    baseline = BacktestEngine(config()).run(bars)
+    gated_config = config().model_copy(update={"research_gates": BacktestResearchGateConfig()})
+    gated = BacktestEngine(gated_config).run(bars)
+
+    assert [trade.model_dump(mode="json") for trade in gated.trades] == [
+        trade.model_dump(mode="json") for trade in baseline.trades
+    ]
+    assert gated.parameter_snapshot["research_gate_skip_counts"] == {}
+
+
+def test_research_gates_reduce_entries_and_record_skip_counts() -> None:
+    bars = breakout_dataset()
+    gated_config = config().model_copy(
+        update={
+            "research_gates": BacktestResearchGateConfig(
+                min_entry_score=40,
+                cooldown_bars_after_trade=1,
+                block_immediate_reentry=True,
+                max_trades_per_day=1,
+            )
+        }
+    )
+
+    report = BacktestEngine(gated_config).run(bars)
+
+    assert len(report.trades) < len(BacktestEngine(config()).run(bars).trades)
+    skip_counts = report.parameter_snapshot["research_gate_skip_counts"]
+    assert skip_counts
+    assert any(key.startswith("skipped_") for key in skip_counts)
+
+
+def test_daily_stop_loss_gate_blocks_after_realized_loss() -> None:
+    bars = [*breakout_dataset(), make_bar(11, high=110.0, low=104.0, close=109.0)]
+    stop_config = config().model_copy(
+        update={
+            "research_gates": BacktestResearchGateConfig(
+                daily_stop_loss=1.0,
+            )
+        }
+    )
+
+    report = BacktestEngine(stop_config).run(bars)
+
+    skip_counts = report.parameter_snapshot["research_gate_skip_counts"]
+    assert "skipped_daily_stop_loss" in skip_counts
+
+
+def test_research_gate_config_rejects_zero_daily_stop_loss() -> None:
+    with pytest.raises(ValidationError, match="daily_stop_loss"):
+        BacktestResearchGateConfig(daily_stop_loss=0.0)
+
+
+def test_daily_stop_loss_uses_exit_day_for_midnight_crossing_loss() -> None:
+    base = datetime(2026, 1, 1, 21, 30, tzinfo=UTC)
+    bars = []
+    for index, bar in enumerate([*breakout_dataset(), make_bar(11, high=110.0, low=104.0, close=109.0)]):
+        shifted = dict(bar)
+        shifted["ts"] = base + timedelta(minutes=15 * index)
+        bars.append(Bar(**shifted))
+    stop_config = config().model_copy(
+        update={
+            "research_gates": BacktestResearchGateConfig(
+                daily_stop_loss=1.0,
+            )
+        }
+    )
+
+    report = BacktestEngine(stop_config).run(bars)
+
+    assert report.trades[-1].net_pnl < 0
+    assert report.trades[-1].entry_time.date() != report.trades[-1].exit_time.date()
+    skip_counts = report.parameter_snapshot["research_gate_skip_counts"]
+    assert "skipped_daily_stop_loss" in skip_counts

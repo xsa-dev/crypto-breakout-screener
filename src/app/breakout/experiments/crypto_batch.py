@@ -28,11 +28,13 @@ from src.app.breakout.experiments.crypto_backtest import (
 )
 from src.app.breakout.normalizer import to_utc
 from src.core.enums import TimeFrame
+from src.core.models import BacktestResearchGateConfig
 
 BATCH_SUMMARY_COLUMNS = [
     "window_label",
     "start",
     "end",
+    "gate_profile",
     "status",
     "blockers",
     "run_id",
@@ -49,6 +51,7 @@ BATCH_SUMMARY_COLUMNS = [
     "expectancy",
     "feed_gap_count",
     "context_timeframes_available",
+    "gate_settings_json",
     "downloaded_csv_paths_json",
     "manifest_path",
     "artifact_dir",
@@ -89,6 +92,7 @@ class BatchWindowSummary(BaseModel):
     window_label: str
     start: datetime
     end: datetime
+    gate_profile: str = "baseline"
     status: Literal["passed", "failed", "blocked"]
     blockers: list[str] = Field(default_factory=list)
     run_id: str | None = None
@@ -105,6 +109,7 @@ class BatchWindowSummary(BaseModel):
     expectancy: float | None = None
     feed_gap_count: int | None = None
     context_timeframes_available: list[str] = Field(default_factory=list)
+    gate_settings: dict[str, Any] = Field(default_factory=dict)
     downloaded_csv_paths: dict[str, str] = Field(default_factory=dict)
     manifest_path: str | None = None
     artifact_dir: str | None = None
@@ -138,6 +143,8 @@ class BatchExperimentSummary(BaseModel):
     market: Literal["crypto"] = "crypto"
     source: Literal["bybit_public"] = "bybit_public"
     execution_timeframe: Literal["M15"] = "M15"
+    gate_profile: str = "baseline"
+    gate_settings: dict[str, Any] = Field(default_factory=dict)
     context_timeframes: list[str] = Field(default_factory=lambda: ["H1", "H4", "D1"])
     windows: list[BatchWindowSummary]
     aggregate: BatchAggregate
@@ -180,12 +187,32 @@ QUARTERLY_2023_2024_WINDOWS = (
 )
 
 
+def research_gate_profile(name: str) -> BacktestResearchGateConfig:
+    """Return named local research gates for overtrading comparison runs."""
+
+    if name == "baseline":
+        return BacktestResearchGateConfig()
+    if name == "conservative-v1":
+        return BacktestResearchGateConfig(
+            min_entry_score=40,
+            cooldown_bars_after_trade=3,
+            cooldown_bars_after_loss=6,
+            block_immediate_reentry=True,
+            max_trades_per_day=12,
+            daily_stop_loss=5_000.0,
+        )
+    msg = f"unsupported gate profile: {name}"
+    raise ValueError(msg)
+
+
 def run_batch_experiment(
     *,
     windows: list[BatchWindow],
     output_dir: str | Path = "artifacts/batch-backtests",
     market_data_dir: str | Path = "artifacts/batch-market-data",
     thresholds: ResearchThresholds | None = None,
+    gate_profile: str = "baseline",
+    research_gates: BacktestResearchGateConfig | None = None,
     symbol: str = "BTCUSDT",
     continue_on_error: bool = True,
     download: DownloadCallable = download_bybit_public_ohlcv_sync,
@@ -195,7 +222,9 @@ def run_batch_experiment(
 
     _validate_batch_inputs(symbol=symbol, windows=windows)
     active_thresholds = thresholds or ResearchThresholds()
-    batch_id = _batch_id(windows=windows, thresholds=active_thresholds)
+    active_gates = research_gates or research_gate_profile(gate_profile)
+    gate_settings = active_gates.model_dump(mode="json")
+    batch_id = _batch_id(windows=windows, thresholds=active_thresholds, gate_profile=gate_profile, gate_settings=gate_settings)
     artifact_dir = Path(output_dir) / "crypto" / symbol / batch_id
     artifact_dir.mkdir(parents=True, exist_ok=True)
 
@@ -208,6 +237,8 @@ def run_batch_experiment(
                 market_data_dir=market_data_dir,
                 symbol=symbol,
                 thresholds=active_thresholds,
+                gate_profile=gate_profile,
+                research_gates=active_gates,
                 download=download,
                 run_single=run_single,
             )
@@ -216,6 +247,8 @@ def run_batch_experiment(
                 window_label=window.label,
                 start=to_utc(window.start),
                 end=to_utc(window.end),
+                gate_profile=gate_profile,
+                gate_settings=gate_settings,
                 status="failed",
                 blockers=[f"window_exception:{type(exc).__name__}:{exc}"],
             )
@@ -229,6 +262,8 @@ def run_batch_experiment(
     summary_json_path = artifact_dir / "summary.json"
     summary = BatchExperimentSummary(
         batch_id=batch_id,
+        gate_profile=gate_profile,
+        gate_settings=gate_settings,
         windows=rows,
         aggregate=aggregate,
         summary_csv_path=str(summary_csv_path),
@@ -305,6 +340,8 @@ def _run_batch_window(
     market_data_dir: str | Path,
     symbol: str,
     thresholds: ResearchThresholds,
+    gate_profile: str,
+    research_gates: BacktestResearchGateConfig,
     download: DownloadCallable,
     run_single: RunCallable,
 ) -> BatchWindowSummary:
@@ -328,6 +365,7 @@ def _run_batch_window(
         source="bybit_public",
         context_csv_paths=context_paths,
         source_metadata=downloaded.source_metadata,
+        research_gates=research_gates,
     )
     metrics = _read_metrics(result.artifact_dir / f"{result.run_id}-metrics.csv")
     manifest = _read_manifest(result.manifest_path)
@@ -337,6 +375,8 @@ def _run_batch_window(
         window_label=window.label,
         start=start,
         end=end,
+        gate_profile=gate_profile,
+        gate_settings=research_gates.model_dump(mode="json"),
         status="passed",
         run_id=result.run_id,
         dataset_hash=result.dataset_hash,
@@ -466,6 +506,7 @@ def _csv_row(row: BatchWindowSummary) -> dict[str, str | int | float | None]:
         "window_label": row.window_label,
         "start": _format_datetime(row.start),
         "end": _format_datetime(row.end),
+        "gate_profile": row.gate_profile,
         "status": row.status,
         "blockers": ";".join(row.blockers),
         "run_id": row.run_id,
@@ -482,6 +523,7 @@ def _csv_row(row: BatchWindowSummary) -> dict[str, str | int | float | None]:
         "expectancy": row.expectancy,
         "feed_gap_count": row.feed_gap_count,
         "context_timeframes_available": ";".join(row.context_timeframes_available),
+        "gate_settings_json": json.dumps(row.gate_settings, sort_keys=True),
         "downloaded_csv_paths_json": json.dumps(row.downloaded_csv_paths, sort_keys=True),
         "manifest_path": row.manifest_path,
         "artifact_dir": row.artifact_dir,
@@ -507,13 +549,21 @@ def _validate_batch_inputs(*, symbol: str, windows: list[BatchWindow]) -> None:
             raise ValueError(msg)
 
 
-def _batch_id(*, windows: list[BatchWindow], thresholds: ResearchThresholds) -> str:
+def _batch_id(
+    *,
+    windows: list[BatchWindow],
+    thresholds: ResearchThresholds,
+    gate_profile: str,
+    gate_settings: dict[str, Any],
+) -> str:
     payload = {
         "windows": [
             {"label": window.label, "start": _format_datetime(window.start), "end": _format_datetime(window.end)}
             for window in windows
         ],
         "thresholds": thresholds.model_dump(mode="json"),
+        "gate_profile": gate_profile,
+        "gate_settings": gate_settings,
         "symbol": "BTCUSDT",
         "source": "bybit_public",
         "execution_timeframe": "M15",
@@ -566,6 +616,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--market-data-dir", default="artifacts/batch-market-data")
     parser.add_argument("--symbol", default="BTCUSDT")
     parser.add_argument("--stop-on-error", action="store_true")
+    parser.add_argument("--gate-profile", choices=["baseline", "conservative-v1"], default="baseline")
     parser.add_argument("--min-trade-count", type=int, default=1)
     parser.add_argument("--min-net-profit", type=float, default=0.0)
     parser.add_argument("--min-profit-factor", type=float, default=1.0)
@@ -585,6 +636,7 @@ def main(argv: list[str] | None = None) -> int:
             min_profit_factor=args.min_profit_factor,
             min_max_drawdown=args.min_max_drawdown,
         ),
+        gate_profile=args.gate_profile,
         symbol=args.symbol,
         continue_on_error=not args.stop_on_error,
     )

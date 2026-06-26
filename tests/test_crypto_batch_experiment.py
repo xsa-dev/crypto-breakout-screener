@@ -73,6 +73,38 @@ def test_batch_runner_writes_deterministic_summary_and_research_verdict(tmp_path
     assert rows[0]["status"] == "passed"
     assert rows[0]["profit_factor"] == "1.5"
     assert set(json.loads(rows[0]["downloaded_csv_paths_json"])) == {"M15", "H1", "H4", "D1"}
+    assert rows[0]["gate_profile"] == "baseline"
+    assert "min_entry_score" in json.loads(rows[0]["gate_settings_json"])
+
+
+def test_batch_runner_records_conservative_gate_profile(tmp_path) -> None:
+    windows = [
+        BatchWindow(
+            label="gated",
+            start=datetime(2024, 1, 1, tzinfo=UTC),
+            end=datetime(2024, 1, 2, tzinfo=UTC),
+        )
+    ]
+    seen_gates: list[dict[str, Any]] = []
+
+    def run_single(**kwargs: Any) -> CryptoExperimentResult:
+        seen_gates.append(kwargs["research_gates"].model_dump(mode="json"))
+        return _fake_run_factory(tmp_path)(**kwargs)
+
+    result = run_batch_experiment(
+        windows=windows,
+        output_dir=tmp_path / "backtests",
+        market_data_dir=tmp_path / "market-data",
+        gate_profile="conservative-v1",
+        download=_fake_download_factory(tmp_path),
+        run_single=run_single,
+    )
+
+    row = result.summary.windows[0]
+    assert result.summary.gate_profile == "conservative-v1"
+    assert row.gate_profile == "conservative-v1"
+    assert row.gate_settings["block_immediate_reentry"] is True
+    assert seen_gates[0]["cooldown_bars_after_loss"] == 6
 
 
 def test_batch_verdict_blocks_failed_thresholds(tmp_path) -> None:
