@@ -84,7 +84,7 @@ The reporting layer SHALL produce deterministic report artifacts with config has
 - **AND** repeated exports of the same report produce stable artifact names and content
 
 ### Requirement: Crypto experiment runner produces deterministic local backtest artifacts
-The system SHALL provide a simple local runner or CLI/script entrypoint for the first BTCUSDT crypto historical experiment. The runner SHALL load normalized historical bars, compute dataset and configuration hashes, run the existing deterministic backtest engine, export report artifacts, write the dataset manifest, and print a concise summary.
+The system SHALL provide a simple local runner or CLI/script entrypoint for the first BTCUSDT crypto historical experiment. The runner SHALL load normalized historical bars, compute dataset and configuration hashes, run the existing deterministic backtest engine, export report artifacts, write the dataset manifest, and print a concise summary. The runner SHALL also support a public download flow that writes BTCUSDT M15/H1/H4/D1 public historical OHLCV CSV input before running or preparing the existing experiment path.
 
 #### Scenario: Runner executes BTCUSDT fixture or public-data experiment
 - **WHEN** the user runs the crypto historical experiment command with BTCUSDT M15 fixture or public historical data
@@ -98,6 +98,13 @@ The system SHALL provide a simple local runner or CLI/script entrypoint for the 
 #### Scenario: Repeated runner execution is reproducible
 - **WHEN** the runner is executed twice with the same normalized dataset, cost assumptions, config, and random seed
 - **THEN** the dataset hash, config hash, run id, and deterministic report artifacts match
+
+#### Scenario: Runner downloads public BTCUSDT data before running
+- **WHEN** the user runs the crypto experiment command in public-download mode with BTCUSDT, M15/H1/H4/D1, and explicit UTC start/end timestamps
+- **THEN** the command downloads public unauthenticated OHLCV/kline data for all four required timeframes
+- **AND** writes deterministic CSV inputs under an ignored local artifact/data directory
+- **AND** runs or can immediately run the existing importer/backtest path against the M15 CSV while retaining H1/H4/D1 CSV paths as context datasets
+- **AND** prints or records both the downloaded CSV paths and the report/manifest artifact path when a backtest is run
 
 ### Requirement: Crypto cost assumptions are explicit and research-scoped
 The system SHALL require explicit non-zero crypto research cost assumptions for the first BTCUSDT perpetual/futures experiment, including spread, slippage, commission or fee, and funding assumption or an explicit unavailable/deferred reason.
@@ -138,3 +145,15 @@ The system SHALL provide a deterministic local approval gate for production OOS/
 - **THEN** the gate blocks approval
 - **AND** the decision records a machine-readable blocker for that metric
 
+### Requirement: Public download failures do not create completed reports
+Public data download failures SHALL fail explicitly and SHALL NOT feed partial or malformed data into the backtest runner as a completed dataset.
+
+#### Scenario: Provider returns an error, timeout, empty result, or malformed payload
+- **WHEN** the public downloader cannot retrieve a valid non-empty BTCUSDT M15/H1/H4/D1 OHLCV datasets for the requested range
+- **THEN** the command fails with an explicit error
+- **AND** no completed report artifact is claimed for that failed download
+
+#### Scenario: Provider pagination is rate-limited or retried
+- **WHEN** the public provider temporarily rate-limits or fails a page request
+- **THEN** the downloader may retry with bounded backoff
+- **AND** it eventually succeeds deterministically or fails with a clear bounded-retry error
