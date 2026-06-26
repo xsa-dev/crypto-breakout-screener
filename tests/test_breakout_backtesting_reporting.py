@@ -471,3 +471,61 @@ def test_candle_body_cap_filter_skips_unavailable_and_above_cap() -> None:
     assert engine._feature_filter_reason({"feature_candle_body_range_ratio": "unavailable"}) == "skipped_feature_candle_body_ratio_unavailable"
     assert engine._feature_filter_reason({"feature_candle_body_range_ratio": 0.8}) == "skipped_feature_candle_body_ratio_above_cap"
     assert engine._feature_filter_reason({"feature_candle_body_range_ratio": 0.75}) is None
+
+
+def test_atr_percentile_filter_skips_unavailable_and_below_min() -> None:
+    engine = BacktestEngine(config().model_copy(update={
+        "feature_filters": BacktestFeatureFilterConfig(min_atr_percentile=0.25)
+    }))
+
+    assert engine._feature_filter_reason({"feature_atr_percentile": "unavailable"}) == "skipped_feature_atr_percentile_unavailable"
+    assert engine._feature_filter_reason({"feature_atr_percentile": 0.25}) == "skipped_feature_atr_percentile_below_min"
+    assert engine._feature_filter_reason({"feature_atr_percentile": 0.2501}) is None
+
+
+def test_breakout_distance_filter_skips_unavailable_and_above_cap() -> None:
+    engine = BacktestEngine(config().model_copy(update={
+        "feature_filters": BacktestFeatureFilterConfig(max_breakout_distance_atr=1.0)
+    }))
+
+    assert engine._feature_filter_reason({"feature_breakout_distance_atr": "unavailable"}) == "skipped_feature_breakout_distance_atr_unavailable"
+    assert engine._feature_filter_reason({"feature_breakout_distance_atr": 1.01}) == "skipped_feature_breakout_distance_atr_above_cap"
+    assert engine._feature_filter_reason({"feature_breakout_distance_atr": 1.0}) is None
+
+
+def test_candle_body_min_filter_skips_unavailable_and_below_min() -> None:
+    engine = BacktestEngine(config().model_copy(update={
+        "feature_filters": BacktestFeatureFilterConfig(min_candle_body_ratio=0.25)
+    }))
+
+    assert engine._feature_filter_reason({"feature_candle_body_range_ratio": "unavailable"}) == "skipped_feature_candle_body_ratio_unavailable"
+    assert engine._feature_filter_reason({"feature_candle_body_range_ratio": 0.25}) == "skipped_feature_candle_body_ratio_below_min"
+    assert engine._feature_filter_reason({"feature_candle_body_range_ratio": 0.2501}) is None
+
+
+def test_combined_regime_filters_preserve_deterministic_order() -> None:
+    engine = BacktestEngine(config().model_copy(update={
+        "feature_filters": BacktestFeatureFilterConfig(
+            require_m15_ema_slope_positive=True,
+            min_atr_percentile=0.25,
+            max_breakout_distance_atr=1.0,
+            max_candle_body_ratio=0.75,
+        )
+    }))
+
+    assert engine._feature_filter_reason({"feature_ema_slope_atr": -0.1}) == "skipped_feature_m15_ema_slope_not_positive"
+    assert engine._feature_filter_reason({
+        "feature_ema_slope_atr": 0.1,
+        "feature_atr_percentile": 0.1,
+    }) == "skipped_feature_atr_percentile_below_min"
+    assert engine._feature_filter_reason({
+        "feature_ema_slope_atr": 0.1,
+        "feature_atr_percentile": 0.5,
+        "feature_breakout_distance_atr": 1.1,
+    }) == "skipped_feature_breakout_distance_atr_above_cap"
+    assert engine._feature_filter_reason({
+        "feature_ema_slope_atr": 0.1,
+        "feature_atr_percentile": 0.5,
+        "feature_breakout_distance_atr": 0.5,
+        "feature_candle_body_range_ratio": 0.8,
+    }) == "skipped_feature_candle_body_ratio_above_cap"

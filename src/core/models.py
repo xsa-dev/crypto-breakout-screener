@@ -409,6 +409,9 @@ class BacktestFeatureFilterConfig(BaseModel):
 
     require_m15_ema_slope_positive: bool = False
     require_h1_trend_long: bool = False
+    min_atr_percentile: float | None = Field(default=None, ge=0, le=1)
+    max_breakout_distance_atr: float | None = Field(default=None, gt=0)
+    min_candle_body_ratio: float | None = Field(default=None, ge=0)
     max_candle_body_ratio: float | None = Field(default=None, gt=0)
 
     @property
@@ -416,8 +419,22 @@ class BacktestFeatureFilterConfig(BaseModel):
         return bool(
             self.require_m15_ema_slope_positive
             or self.require_h1_trend_long
+            or self.min_atr_percentile is not None
+            or self.max_breakout_distance_atr is not None
+            or self.min_candle_body_ratio is not None
             or self.max_candle_body_ratio is not None
         )
+
+    @model_validator(mode="after")
+    def validate_candle_body_bounds(self) -> "BacktestFeatureFilterConfig":
+        if (
+            self.min_candle_body_ratio is not None
+            and self.max_candle_body_ratio is not None
+            and self.min_candle_body_ratio >= self.max_candle_body_ratio
+        ):
+            msg = "min_candle_body_ratio must be below max_candle_body_ratio"
+            raise ValueError(msg)
+        return self
 
 
 class BacktestConfig(BaseModel):

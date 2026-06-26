@@ -538,6 +538,24 @@ class BacktestEngine:
         if filters.require_h1_trend_long:
             if feature_snapshot.get("feature_context_H1_trend_alignment") != "long":
                 return "skipped_feature_h1_trend_not_long"
+        if filters.min_atr_percentile is not None:
+            atr_percentile = feature_snapshot.get("feature_atr_percentile")
+            if not isinstance(atr_percentile, int | float):
+                return "skipped_feature_atr_percentile_unavailable"
+            if atr_percentile <= filters.min_atr_percentile:
+                return "skipped_feature_atr_percentile_below_min"
+        if filters.max_breakout_distance_atr is not None:
+            breakout_distance = feature_snapshot.get("feature_breakout_distance_atr")
+            if not isinstance(breakout_distance, int | float):
+                return "skipped_feature_breakout_distance_atr_unavailable"
+            if breakout_distance > filters.max_breakout_distance_atr:
+                return "skipped_feature_breakout_distance_atr_above_cap"
+        if filters.min_candle_body_ratio is not None:
+            body_ratio = feature_snapshot.get("feature_candle_body_range_ratio")
+            if not isinstance(body_ratio, int | float):
+                return "skipped_feature_candle_body_ratio_unavailable"
+            if body_ratio <= filters.min_candle_body_ratio:
+                return "skipped_feature_candle_body_ratio_below_min"
         if filters.max_candle_body_ratio is not None:
             body_ratio = feature_snapshot.get("feature_candle_body_range_ratio")
             if not isinstance(body_ratio, int | float):
