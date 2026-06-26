@@ -437,6 +437,32 @@ class BacktestFeatureFilterConfig(BaseModel):
         return self
 
 
+class BacktestConfirmationFilterConfig(BaseModel):
+    """Disabled-by-default local research filters for false-breakout confirmation."""
+
+    required_closes_above_breakout: int = Field(default=0, ge=0, le=2)
+    min_close_position: float | None = Field(default=None, ge=0, le=1)
+    cancel_on_return_inside_range: bool = False
+
+    @property
+    def configured(self) -> bool:
+        return bool(
+            self.required_closes_above_breakout > 0
+            or self.min_close_position is not None
+            or self.cancel_on_return_inside_range
+        )
+
+    @model_validator(mode="after")
+    def validate_confirmation_requirements(self) -> "BacktestConfirmationFilterConfig":
+        if self.min_close_position is not None and self.required_closes_above_breakout < 1:
+            msg = "min_close_position requires at least one confirmation close"
+            raise ValueError(msg)
+        if self.cancel_on_return_inside_range and self.required_closes_above_breakout < 1:
+            msg = "cancel_on_return_inside_range requires at least one confirmation close"
+            raise ValueError(msg)
+        return self
+
+
 class BacktestConfig(BaseModel):
     """Deterministic local backtest configuration."""
 
@@ -448,6 +474,9 @@ class BacktestConfig(BaseModel):
     cost_model: BacktestCostModel = Field(default_factory=BacktestCostModel)
     research_gates: BacktestResearchGateConfig = Field(default_factory=BacktestResearchGateConfig)
     feature_filters: BacktestFeatureFilterConfig = Field(default_factory=BacktestFeatureFilterConfig)
+    confirmation_filters: BacktestConfirmationFilterConfig = Field(
+        default_factory=BacktestConfirmationFilterConfig
+    )
     strategy: BreakoutStrategyConfig = Field(default_factory=BreakoutStrategyConfig)
     export_parquet: bool = False
 

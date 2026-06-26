@@ -51,6 +51,20 @@ class ResearchGateState:
     skip_counts: Counter[str] = field(default_factory=Counter)
 
 
+@dataclass
+class PendingBreakoutCandidate:
+    """Causal pending breakout waiting for later closed-bar confirmation."""
+
+    score: BreakoutScore
+    quantity: float
+    breakout_level: float
+    pre_breakout_range_high: float
+    candidate_index: int
+    candidate_bar: Bar
+    feature_snapshot: dict[str, float | int | str | bool]
+    confirmed_closes: int = 0
+
+
 class BacktestEngine:
     """Closed-bar deterministic replay engine with no live broker side effects."""
 
@@ -97,19 +111,35 @@ class BacktestEngine:
         ]
         unavailable: dict[str, str] = {}
         gate_state = ResearchGateState()
+        pending_candidate: PendingBreakoutCandidate | None = None
 
         for index in range(self.config.min_warmup_bars, len(ordered) - 1):
             history = ordered[: index + 1]
             current = ordered[index]
             next_bar = ordered[index + 1]
-            trade = self._evaluate_closed_bar(
-                history,
-                current,
-                next_bar,
-                index,
-                config_hash,
-                gate_state,
-            )
+            trade: BacktestTrade | None = None
+            if pending_candidate is not None:
+                trade, pending_candidate = self._evaluate_pending_confirmation(
+                    pending_candidate,
+                    current=current,
+                    next_bar=next_bar,
+                    index=index,
+                    config_hash=config_hash,
+                    gate_state=gate_state,
+                )
+            else:
+                result = self._evaluate_closed_bar(
+                    history,
+                    current,
+                    next_bar,
+                    index,
+                    config_hash,
+                    gate_state,
+                )
+                if isinstance(result, PendingBreakoutCandidate):
+                    pending_candidate = result
+                else:
+                    trade = result
             if trade is None:
                 equity_curve.append({"timestamp": current["ts"].isoformat(), "equity": equity})
                 continue
@@ -333,7 +363,7 @@ class BacktestEngine:
         index: int,
         config_hash: str,
         gate_state: ResearchGateState,
-    ) -> BacktestTrade | None:
+    ) -> BacktestTrade | PendingBreakoutCandidate | None:
         levels = self.level_engine.detect_pivots(list(history), as_of_index=len(history) - 1)
         pivot_highs = [level for level in levels if level.price < current["close"]]
         if not pivot_highs:
@@ -388,6 +418,16 @@ class BacktestEngine:
         decision = self.risk_manager.evaluate(intent, RiskState())
         if not decision.approved or decision.quantity <= 0:
             return None
+        if self.config.confirmation_filters.configured:
+            return PendingBreakoutCandidate(
+                score=score,
+                quantity=decision.quantity,
+                breakout_level=level.price,
+                pre_breakout_range_high=level.price,
+                candidate_index=index,
+                candidate_bar=current,
+                feature_snapshot=feature_snapshot,
+            )
         return self._close_next_bar_trade(
             score=score,
             quantity=decision.quantity,
@@ -398,6 +438,58 @@ class BacktestEngine:
             level_price=level.price,
             feature_snapshot=feature_snapshot,
         )
+
+    def _evaluate_pending_confirmation(
+        self,
+        candidate: PendingBreakoutCandidate,
+        *,
+        current: Bar,
+        next_bar: Bar,
+        index: int,
+        config_hash: str,
+        gate_state: ResearchGateState,
+    ) -> tuple[BacktestTrade | None, PendingBreakoutCandidate | None]:
+        filters = self.config.confirmation_filters
+        if filters.cancel_on_return_inside_range and current["low"] <= candidate.pre_breakout_range_high:
+            gate_state.skip_counts["skipped_confirmation_returned_inside_range"] += 1
+            return None, None
+        if current["close"] <= candidate.breakout_level:
+            gate_state.skip_counts["skipped_confirmation_close_not_above_breakout"] += 1
+            return None, None
+        if filters.min_close_position is not None:
+            current_range = current["high"] - current["low"]
+            if current_range <= 0:
+                gate_state.skip_counts["skipped_confirmation_close_position_unavailable"] += 1
+                return None, None
+            close_position = (current["close"] - current["low"]) / current_range
+            if close_position < filters.min_close_position:
+                gate_state.skip_counts["skipped_confirmation_close_position_below_min"] += 1
+                return None, None
+        candidate.confirmed_closes += 1
+        if candidate.confirmed_closes < filters.required_closes_above_breakout:
+            return None, candidate
+        feature_snapshot = dict(candidate.feature_snapshot)
+        feature_snapshot.update(
+            {
+                "feature_confirmation_candidate_index": candidate.candidate_index,
+                "feature_confirmation_entry_delay_bars": index - candidate.candidate_index,
+                "feature_confirmation_closes": candidate.confirmed_closes,
+            }
+        )
+        return (
+            self._close_next_bar_trade(
+                score=candidate.score,
+                quantity=candidate.quantity,
+                current=current,
+                next_bar=next_bar,
+                index=index,
+                config_hash=config_hash,
+                level_price=candidate.breakout_level,
+                feature_snapshot=feature_snapshot,
+            ),
+            None,
+        )
+
 
     def _close_next_bar_trade(
         self,

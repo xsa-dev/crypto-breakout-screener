@@ -20,6 +20,7 @@ from src.app.breakout.backtesting import (
 )
 from src.core.models import (
     BacktestConfig,
+    BacktestConfirmationFilterConfig,
     BacktestCostModel,
     BacktestFeatureFilterConfig,
     BacktestResearchGateConfig,
@@ -529,3 +530,75 @@ def test_combined_regime_filters_preserve_deterministic_order() -> None:
         "feature_breakout_distance_atr": 0.5,
         "feature_candle_body_range_ratio": 0.8,
     }) == "skipped_feature_candle_body_ratio_above_cap"
+
+
+def test_confirmation_filters_disabled_preserve_trade_selection() -> None:
+    base_report = BacktestEngine(config()).run(breakout_dataset())
+    filtered_config = config().model_copy(update={"confirmation_filters": BacktestConfirmationFilterConfig()})
+    filtered_report = BacktestEngine(filtered_config).run(breakout_dataset())
+
+    assert [trade.trade_id for trade in filtered_report.trades] == [trade.trade_id for trade in base_report.trades]
+    assert filtered_report.metrics == base_report.metrics
+    assert filtered_report.parameter_snapshot["research_gate_skip_counts"] == {}
+
+
+def test_one_close_confirmation_delays_entry_without_lookahead() -> None:
+    base_report = BacktestEngine(config()).run(breakout_dataset())
+    confirmed_config = config().model_copy(update={
+        "confirmation_filters": BacktestConfirmationFilterConfig(required_closes_above_breakout=1)
+    })
+    confirmed_report = BacktestEngine(confirmed_config).run(breakout_dataset())
+
+    assert base_report.trades
+    assert len(confirmed_report.trades) == 1
+    trade = confirmed_report.trades[0]
+    assert trade.entry_time > base_report.trades[0].entry_time
+    assert trade.metadata["feature_confirmation_candidate_index"] == 7
+    assert trade.metadata["feature_confirmation_entry_delay_bars"] == 1
+    assert trade.metadata["feature_confirmation_closes"] == 1
+
+
+def test_two_close_confirmation_requires_consecutive_closes() -> None:
+    confirmed_config = config().model_copy(update={
+        "confirmation_filters": BacktestConfirmationFilterConfig(required_closes_above_breakout=2)
+    })
+    confirmed_report = BacktestEngine(confirmed_config).run(breakout_dataset())
+
+    assert len(confirmed_report.trades) == 1
+    trade = confirmed_report.trades[0]
+    assert trade.metadata["feature_confirmation_entry_delay_bars"] == 2
+    assert trade.metadata["feature_confirmation_closes"] == 2
+
+
+def test_confirmation_close_position_filter_and_zero_range_failure() -> None:
+    confirmed_config = config().model_copy(update={
+        "confirmation_filters": BacktestConfirmationFilterConfig(
+            required_closes_above_breakout=1,
+            min_close_position=0.70,
+        )
+    })
+    confirmed_report = BacktestEngine(confirmed_config).run(breakout_dataset())
+    assert len(confirmed_report.trades) == 1
+
+    zero_range_bars = breakout_dataset()
+    zero_range_bars[8] = make_bar(8, high=107.0, low=107.0, close=107.0, open_=107.0)
+    zero_range_report = BacktestEngine(confirmed_config).run(zero_range_bars)
+    assert zero_range_report.trades == []
+    assert zero_range_report.parameter_snapshot["research_gate_skip_counts"] == {
+        "skipped_confirmation_close_position_unavailable": 1
+    }
+
+
+def test_confirmation_return_inside_range_cancels_candidate() -> None:
+    confirmed_config = config().model_copy(update={
+        "confirmation_filters": BacktestConfirmationFilterConfig(
+            required_closes_above_breakout=1,
+            cancel_on_return_inside_range=True,
+        )
+    })
+    confirmed_report = BacktestEngine(confirmed_config).run(breakout_dataset())
+
+    assert confirmed_report.trades == []
+    assert confirmed_report.parameter_snapshot["research_gate_skip_counts"] == {
+        "skipped_confirmation_returned_inside_range": 1
+    }

@@ -254,6 +254,67 @@ def test_batch_runner_records_volatility_regime_filter_profile(tmp_path) -> None
 
 
 
+def test_batch_runner_records_confirmation_filter_profile(tmp_path) -> None:
+    windows = [
+        BatchWindow(
+            label="confirm",
+            start=datetime(2024, 1, 1, tzinfo=UTC),
+            end=datetime(2024, 1, 2, tzinfo=UTC),
+        )
+    ]
+    seen_gates: list[dict[str, Any]] = []
+    seen_filters: list[dict[str, Any]] = []
+    seen_confirmation: list[dict[str, Any]] = []
+
+    def run_single(**kwargs: Any) -> CryptoExperimentResult:
+        seen_gates.append(kwargs["research_gates"].model_dump(mode="json"))
+        seen_filters.append(kwargs["feature_filters"].model_dump(mode="json"))
+        seen_confirmation.append(kwargs["confirmation_filters"].model_dump(mode="json"))
+        return _fake_run_factory(tmp_path)(**kwargs)
+
+    profile = "conservative-v1-m15-slope-positive-max-trades-8-confirm-close-1-closepos70"
+    result = run_batch_experiment(
+        windows=windows,
+        output_dir=tmp_path / "backtests",
+        market_data_dir=tmp_path / "market-data",
+        gate_profile=profile,
+        download=_fake_download_factory(tmp_path),
+        run_single=run_single,
+    )
+
+    row = result.summary.windows[0]
+    assert result.summary.gate_profile == profile
+    assert result.summary.feature_filter_profile == "conservative-v1-m15-slope-positive"
+    assert result.summary.risk_control_profile == "conservative-v1-m15-slope-positive-max-trades-8"
+    assert result.summary.confirmation_filter_profile == profile
+    assert row.confirmation_filter_profile == profile
+    assert row.confirmation_filter_settings == {
+        "cancel_on_return_inside_range": False,
+        "min_close_position": 0.7,
+        "required_closes_above_breakout": 1,
+    }
+    assert row.confirmation_filter_skip_counts == {
+        "skipped_confirmation_close_not_above_breakout": 17,
+        "skipped_confirmation_close_position_below_min": 19,
+        "skipped_confirmation_returned_inside_range": 23,
+    }
+    assert seen_gates[0]["max_trades_per_day"] == 8
+    assert seen_filters[0]["require_m15_ema_slope_positive"] is True
+    assert seen_confirmation[0]["required_closes_above_breakout"] == 1
+    assert seen_confirmation[0]["min_close_position"] == 0.7
+
+    with result.summary_csv_path.open(newline="", encoding="utf-8") as file:
+        rows = list(csv.DictReader(file))
+    assert rows[0]["confirmation_filter_profile"] == profile
+    assert json.loads(rows[0]["confirmation_filter_settings_json"]) == row.confirmation_filter_settings
+    assert json.loads(rows[0]["confirmation_filter_skip_counts_json"]) == row.confirmation_filter_skip_counts
+
+    summary = json.loads(result.summary_json_path.read_text(encoding="utf-8"))
+    assert summary["confirmation_filter_profile"] == profile
+    assert summary["confirmation_filter_settings"] == row.confirmation_filter_settings
+
+
+
 def test_batch_runner_writes_bad_regime_diagnostics_for_failed_windows(tmp_path) -> None:
     windows = [
         BatchWindow(
@@ -503,7 +564,11 @@ def _fake_run_factory(
             json.dumps(
                 {
                     "feature_filters": kwargs["feature_filters"].model_dump(mode="json"),
+                    "confirmation_filters": kwargs["confirmation_filters"].model_dump(mode="json"),
                     "research_gate_skip_counts": {
+                        "skipped_confirmation_close_not_above_breakout": 17,
+                        "skipped_confirmation_close_position_below_min": 19,
+                        "skipped_confirmation_returned_inside_range": 23,
                         "skipped_feature_m15_ema_slope_not_positive": 3,
                         "skipped_feature_atr_percentile_below_min": 7,
                         "skipped_feature_breakout_distance_atr_above_cap": 11,
