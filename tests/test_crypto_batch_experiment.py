@@ -515,6 +515,8 @@ def _fake_run_factory(
         drawdown_path = artifact_dir / f"{run_id}-drawdown.csv"
         forward_path = artifact_dir / f"{run_id}-forward-path-diagnostics.csv"
         holding_path = artifact_dir / f"{run_id}-holding-horizon-pnl.csv"
+        path_risk_path = artifact_dir / f"{run_id}-path-risk-diagnostics.csv"
+        path_risk_summary_path = artifact_dir / f"{run_id}-path-risk-threshold-summary.csv"
         parameters_path = artifact_dir / f"{run_id}-parameters.json"
         metrics_path.write_text(
             "metric,value\n"
@@ -575,6 +577,19 @@ def _fake_run_factory(
                 encoding="utf-8",
             )
             artifact_paths.extend([str(forward_path), str(holding_path)])
+        if kwargs.get("path_risk_diagnostics"):
+            path_risk_path.write_text(
+                "trade_id,horizon_bars,available,max_favorable_atr,max_adverse_atr,breakeven_reachable,breakeven_touched_after_reach,fav_1p0_before_adv_1p0,adv_1p0_before_fav_1p0,trail_after_fav_1p0_giveback_0p5_touched,trail_after_fav_1p0_giveback_1p0_touched\n"
+                f"{run_id}-1,1,True,1.5,0.8,True,False,True,False,True,False\n"
+                f"{run_id}-2,1,True,0.7,1.2,False,unavailable,False,True,unavailable,unavailable\n",
+                encoding="utf-8",
+            )
+            path_risk_summary_path.write_text(
+                "horizon_bars,trade_count,available_count,unavailable_count,average_max_favorable_atr,median_max_favorable_atr,average_max_adverse_atr,median_max_adverse_atr,breakeven_reachable_ratio,breakeven_touched_after_reach_ratio\n"
+                "1,2,2,0,1.1,1.1,1.0,1.0,0.5,0.0\n",
+                encoding="utf-8",
+            )
+            artifact_paths.extend([str(path_risk_path), str(path_risk_summary_path)])
         manifest_path.write_text(
             json.dumps(
                 {
@@ -672,4 +687,53 @@ def test_batch_runner_writes_forward_path_diagnostic_summaries(tmp_path) -> None
 
     summary = json.loads(result.summary_json_path.read_text(encoding="utf-8"))
     assert summary["forward_path_diagnostics_enabled"] is True
+    assert summary["diagnostic_artifact_paths"] == paths
+
+
+def test_batch_runner_writes_path_risk_diagnostic_summaries(tmp_path) -> None:
+    windows = [
+        BatchWindow(
+            label="path-pass",
+            start=datetime(2024, 1, 1, tzinfo=UTC),
+            end=datetime(2024, 1, 2, tzinfo=UTC),
+        ),
+        BatchWindow(
+            label="path-fail",
+            start=datetime(2024, 1, 2, tzinfo=UTC),
+            end=datetime(2024, 1, 3, tzinfo=UTC),
+        ),
+    ]
+
+    result = run_batch_experiment(
+        windows=windows,
+        output_dir=tmp_path / "backtests",
+        market_data_dir=tmp_path / "market-data",
+        gate_profile="conservative-v1-m15-slope-positive-max-trades-8",
+        enable_path_risk_diagnostics=True,
+        download=_fake_download_factory(tmp_path),
+        run_single=_fake_run_factory(tmp_path, net_profit=100.0, profit_factor=1.5),
+    )
+
+    assert result.summary.path_risk_diagnostics_enabled is True
+    paths = result.summary.diagnostic_artifact_paths
+    assert set(paths) == {"path_risk_window_summary", "passed_vs_failed_path_risk_summary"}
+    assert Path(paths["path_risk_window_summary"]).exists()
+    assert Path(paths["passed_vs_failed_path_risk_summary"]).exists()
+    assert all("path_risk_diagnostics" in row.feature_artifact_paths for row in result.summary.windows)
+    assert all("path_risk_threshold_summary" in row.feature_artifact_paths for row in result.summary.windows)
+
+    with Path(paths["path_risk_window_summary"]).open(newline="", encoding="utf-8") as file:
+        rows = list(csv.DictReader(file))
+    assert len(rows) == 2
+    assert rows[0]["horizon_bars"] == "1"
+    assert rows[0]["average_max_favorable_atr"] == "1.1"
+
+    with Path(paths["passed_vs_failed_path_risk_summary"]).open(newline="", encoding="utf-8") as file:
+        grouped = list(csv.DictReader(file))
+    assert grouped
+    assert grouped[0]["window_group"] == "passed"
+    assert grouped[0]["fav_1p0_before_adv_1p0_ratio"] == "0.5"
+
+    summary = json.loads(result.summary_json_path.read_text(encoding="utf-8"))
+    assert summary["path_risk_diagnostics_enabled"] is True
     assert summary["diagnostic_artifact_paths"] == paths

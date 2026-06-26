@@ -189,6 +189,7 @@ class BatchExperimentSummary(BaseModel):
     aggregate: BatchAggregate
     bad_regime_diagnostics_enabled: bool = False
     forward_path_diagnostics_enabled: bool = False
+    path_risk_diagnostics_enabled: bool = False
     diagnostic_artifact_paths: dict[str, str] = Field(default_factory=dict)
     summary_csv_path: str
     summary_json_path: str
@@ -447,6 +448,7 @@ def run_batch_experiment(
     confirmation_filters: BacktestConfirmationFilterConfig | None = None,
     enable_bad_regime_diagnostics: bool = False,
     enable_forward_path_diagnostics: bool = False,
+    enable_path_risk_diagnostics: bool = False,
     symbol: str = "BTCUSDT",
     continue_on_error: bool = True,
     download: DownloadCallable = download_bybit_public_ohlcv_sync,
@@ -498,6 +500,7 @@ def run_batch_experiment(
         confirmation_filter_settings=confirmation_filter_settings,
         bad_regime_diagnostics_enabled=enable_bad_regime_diagnostics,
         forward_path_diagnostics_enabled=enable_forward_path_diagnostics,
+        path_risk_diagnostics_enabled=enable_path_risk_diagnostics,
     )
     artifact_dir = Path(output_dir) / "crypto" / symbol / batch_id
     artifact_dir.mkdir(parents=True, exist_ok=True)
@@ -520,6 +523,7 @@ def run_batch_experiment(
                 feature_filters=active_feature_filters,
                 confirmation_filters=active_confirmation_filters,
                 forward_path_diagnostics=enable_forward_path_diagnostics,
+                path_risk_diagnostics=enable_path_risk_diagnostics,
                 download=download,
                 run_single=run_single,
             )
@@ -561,6 +565,8 @@ def run_batch_experiment(
     )
     if enable_forward_path_diagnostics:
         diagnostic_paths.update(_write_forward_path_batch_diagnostics(artifact_dir=artifact_dir, rows=rows))
+    if enable_path_risk_diagnostics:
+        diagnostic_paths.update(_write_path_risk_batch_diagnostics(artifact_dir=artifact_dir, rows=rows))
     summary = BatchExperimentSummary(
         batch_id=batch_id,
         gate_profile=gate_profile,
@@ -577,6 +583,7 @@ def run_batch_experiment(
         aggregate=aggregate,
         bad_regime_diagnostics_enabled=enable_bad_regime_diagnostics,
         forward_path_diagnostics_enabled=enable_forward_path_diagnostics,
+        path_risk_diagnostics_enabled=enable_path_risk_diagnostics,
         diagnostic_artifact_paths=diagnostic_paths,
         summary_csv_path=str(summary_csv_path),
         summary_json_path=str(summary_json_path),
@@ -661,6 +668,7 @@ def _run_batch_window(
     feature_filters: BacktestFeatureFilterConfig,
     confirmation_filters: BacktestConfirmationFilterConfig,
     forward_path_diagnostics: bool,
+    path_risk_diagnostics: bool,
     download: DownloadCallable,
     run_single: RunCallable,
 ) -> BatchWindowSummary:
@@ -688,6 +696,7 @@ def _run_batch_window(
         feature_filters=feature_filters,
         confirmation_filters=confirmation_filters,
         forward_path_diagnostics=forward_path_diagnostics,
+        path_risk_diagnostics=path_risk_diagnostics,
     )
     metrics = _read_metrics(result.artifact_dir / f"{result.run_id}-metrics.csv")
     manifest = _read_manifest(result.manifest_path)
@@ -1102,6 +1111,120 @@ def _passed_vs_failed_forward_path_rows(rows: list[BatchWindowSummary]) -> list[
 
 
 
+def _write_path_risk_batch_diagnostics(
+    *,
+    artifact_dir: Path,
+    rows: list[BatchWindowSummary],
+) -> dict[str, str]:
+    paths = {
+        "path_risk_window_summary": artifact_dir / "path-risk-window-summary.csv",
+        "passed_vs_failed_path_risk_summary": artifact_dir / "passed-vs-failed-path-risk-summary.csv",
+    }
+    _write_csv_rows(
+        paths["path_risk_window_summary"],
+        [
+            "window_label",
+            "status",
+            "blockers",
+            "run_id",
+            "horizon_bars",
+            "trade_count",
+            "available_count",
+            "unavailable_count",
+            "average_max_favorable_atr",
+            "median_max_favorable_atr",
+            "average_max_adverse_atr",
+            "median_max_adverse_atr",
+            "breakeven_reachable_ratio",
+            "breakeven_touched_after_reach_ratio",
+        ],
+        _path_risk_window_rows(rows),
+    )
+    _write_csv_rows(
+        paths["passed_vs_failed_path_risk_summary"],
+        [
+            "window_group",
+            "horizon_bars",
+            "trade_count",
+            "average_max_favorable_atr",
+            "median_max_favorable_atr",
+            "average_max_adverse_atr",
+            "median_max_adverse_atr",
+            "breakeven_reachable_ratio",
+            "breakeven_touched_after_reach_ratio",
+            "fav_1p0_before_adv_1p0_ratio",
+            "adv_1p0_before_fav_1p0_ratio",
+            "trail_after_fav_1p0_giveback_0p5_touched_ratio",
+            "trail_after_fav_1p0_giveback_1p0_touched_ratio",
+        ],
+        _passed_vs_failed_path_risk_rows(rows),
+    )
+    return {key: str(path) for key, path in paths.items()}
+
+
+def _path_risk_window_rows(rows: list[BatchWindowSummary]) -> list[dict[str, object]]:
+    output: list[dict[str, object]] = []
+    for row in rows:
+        path = row.feature_artifact_paths.get("path_risk_threshold_summary")
+        if not path:
+            continue
+        for item in _read_csv_dicts(Path(path)):
+            enriched: dict[str, object] = {
+                "window_label": row.window_label,
+                "status": row.status,
+                "blockers": ";".join(row.blockers),
+                "run_id": row.run_id or "unavailable",
+                "horizon_bars": item.get("horizon_bars", "unavailable"),
+                "trade_count": item.get("trade_count", "unavailable"),
+                "available_count": item.get("available_count", "unavailable"),
+                "unavailable_count": item.get("unavailable_count", "unavailable"),
+                "average_max_favorable_atr": item.get("average_max_favorable_atr", "unavailable"),
+                "median_max_favorable_atr": item.get("median_max_favorable_atr", "unavailable"),
+                "average_max_adverse_atr": item.get("average_max_adverse_atr", "unavailable"),
+                "median_max_adverse_atr": item.get("median_max_adverse_atr", "unavailable"),
+                "breakeven_reachable_ratio": item.get("breakeven_reachable_ratio", "unavailable"),
+                "breakeven_touched_after_reach_ratio": item.get("breakeven_touched_after_reach_ratio", "unavailable"),
+            }
+            output.append(enriched)
+    return output
+
+
+def _passed_vs_failed_path_risk_rows(rows: list[BatchWindowSummary]) -> list[dict[str, object]]:
+    grouped: dict[tuple[str, int], list[dict[str, str]]] = {}
+    for row in rows:
+        path = row.feature_artifact_paths.get("path_risk_diagnostics")
+        if not path:
+            continue
+        group = "passed" if row.status == "passed" else "failed"
+        for item in _read_csv_dicts(Path(path)):
+            if item.get("available") != "True":
+                continue
+            horizon = _optional_int(item.get("horizon_bars"))
+            if horizon is None:
+                continue
+            grouped.setdefault((group, horizon), []).append(item)
+    output: list[dict[str, object]] = []
+    for (group, horizon), items in sorted(grouped.items()):
+        output.append(
+            {
+                "window_group": group,
+                "horizon_bars": horizon,
+                "trade_count": len(items),
+                "average_max_favorable_atr": _mean_csv_number(items, "max_favorable_atr"),
+                "median_max_favorable_atr": _median_csv_number(items, "max_favorable_atr"),
+                "average_max_adverse_atr": _mean_csv_number(items, "max_adverse_atr"),
+                "median_max_adverse_atr": _median_csv_number(items, "max_adverse_atr"),
+                "breakeven_reachable_ratio": _csv_true_ratio(items, "breakeven_reachable"),
+                "breakeven_touched_after_reach_ratio": _csv_true_ratio(items, "breakeven_touched_after_reach"),
+                "fav_1p0_before_adv_1p0_ratio": _csv_true_ratio(items, "fav_1p0_before_adv_1p0"),
+                "adv_1p0_before_fav_1p0_ratio": _csv_true_ratio(items, "adv_1p0_before_fav_1p0"),
+                "trail_after_fav_1p0_giveback_0p5_touched_ratio": _csv_true_ratio(items, "trail_after_fav_1p0_giveback_0p5_touched"),
+                "trail_after_fav_1p0_giveback_1p0_touched_ratio": _csv_true_ratio(items, "trail_after_fav_1p0_giveback_1p0_touched"),
+            }
+        )
+    return output
+
+
 def _csv_numbers(rows: list[dict[str, str]], key: str) -> list[float]:
     values: list[float] = []
     for row in rows:
@@ -1364,6 +1487,8 @@ def _feature_artifact_paths(paths: list[str]) -> dict[str, str]:
         "worst_day_attribution": "-worst-day-attribution.csv",
         "forward_path_diagnostics": "-forward-path-diagnostics.csv",
         "holding_horizon_pnl": "-holding-horizon-pnl.csv",
+        "path_risk_diagnostics": "-path-risk-diagnostics.csv",
+        "path_risk_threshold_summary": "-path-risk-threshold-summary.csv",
     }
     return {
         key: path
@@ -1408,6 +1533,7 @@ def _batch_id(
     confirmation_filter_settings: dict[str, Any] | None = None,
     bad_regime_diagnostics_enabled: bool = False,
     forward_path_diagnostics_enabled: bool = False,
+    path_risk_diagnostics_enabled: bool = False,
 ) -> str:
     payload = {
         "windows": [
@@ -1427,6 +1553,7 @@ def _batch_id(
         "confirmation_filter_settings": confirmation_filter_settings or {},
         "bad_regime_diagnostics_enabled": bad_regime_diagnostics_enabled,
         "forward_path_diagnostics_enabled": forward_path_diagnostics_enabled,
+        "path_risk_diagnostics_enabled": path_risk_diagnostics_enabled,
         "symbol": "BTCUSDT",
         "source": "bybit_public",
         "execution_timeframe": "M15",
@@ -1516,6 +1643,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--min-max-drawdown", type=float, default=-0.35)
     parser.add_argument("--bad-regime-diagnostics", action="store_true")
     parser.add_argument("--forward-path-diagnostics", action="store_true")
+    parser.add_argument("--path-risk-diagnostics", action="store_true")
     return parser
 
 
@@ -1534,6 +1662,7 @@ def main(argv: list[str] | None = None) -> int:
         gate_profile=args.gate_profile,
         enable_bad_regime_diagnostics=args.bad_regime_diagnostics,
         enable_forward_path_diagnostics=args.forward_path_diagnostics,
+        enable_path_risk_diagnostics=args.path_risk_diagnostics,
         symbol=args.symbol,
         continue_on_error=not args.stop_on_error,
     )

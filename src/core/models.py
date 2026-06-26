@@ -481,6 +481,10 @@ class BacktestConfig(BaseModel):
     export_parquet: bool = False
     forward_path_diagnostics: bool = False
     forward_path_horizons: tuple[int, ...] = (1, 2, 4, 8, 16)
+    path_risk_diagnostics: bool = False
+    path_risk_favorable_atr_thresholds: tuple[float, ...] = (0.5, 1.0, 1.5, 2.0)
+    path_risk_adverse_atr_thresholds: tuple[float, ...] = (0.5, 1.0, 1.5, 2.0)
+    path_risk_trailing_giveback_atr: tuple[float, ...] = (0.5, 1.0)
 
     @model_validator(mode="after")
     def validate_acceptance_costs(self) -> "BacktestConfig":
@@ -505,6 +509,24 @@ class BacktestConfig(BaseModel):
         if tuple(sorted(set(self.forward_path_horizons))) != self.forward_path_horizons:
             msg = "forward_path_horizons must be unique and sorted ascending"
             raise ValueError(msg)
+        return self
+
+    @model_validator(mode="after")
+    def validate_path_risk_thresholds(self) -> "BacktestConfig":
+        for name, values in (
+            ("path_risk_favorable_atr_thresholds", self.path_risk_favorable_atr_thresholds),
+            ("path_risk_adverse_atr_thresholds", self.path_risk_adverse_atr_thresholds),
+            ("path_risk_trailing_giveback_atr", self.path_risk_trailing_giveback_atr),
+        ):
+            if not values:
+                msg = f"{name} must not be empty"
+                raise ValueError(msg)
+            if any(value <= 0 for value in values):
+                msg = f"{name} must contain positive values"
+                raise ValueError(msg)
+            if tuple(sorted(set(values))) != values:
+                msg = f"{name} must be unique and sorted ascending"
+                raise ValueError(msg)
         return self
 
 
@@ -625,4 +647,6 @@ class BacktestReport(BaseModel):
     monte_carlo: MonteCarloResult | None = None
     forward_path_diagnostics: list[dict[str, object]] = Field(default_factory=list)
     holding_horizon_diagnostics: list[dict[str, object]] = Field(default_factory=list)
+    path_risk_diagnostics: list[dict[str, object]] = Field(default_factory=list)
+    path_risk_threshold_summary: list[dict[str, object]] = Field(default_factory=list)
     artifact_paths: list[str] = Field(default_factory=list)

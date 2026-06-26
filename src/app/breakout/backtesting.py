@@ -4,6 +4,7 @@ import csv
 import hashlib
 import json
 import random
+import statistics
 from bisect import bisect_right
 from collections import Counter, defaultdict
 from collections.abc import Mapping, Sequence
@@ -359,6 +360,12 @@ class BacktestEngine:
             _write_dynamic_csv_rows(forward_path, report.forward_path_diagnostics)
             _write_dynamic_csv_rows(holding_path, report.holding_horizon_diagnostics)
             paths.extend([str(forward_path), str(holding_path)])
+        if report.path_risk_diagnostics:
+            path_risk_path = directory / f"{report.run_id}-path-risk-diagnostics.csv"
+            threshold_path = directory / f"{report.run_id}-path-risk-threshold-summary.csv"
+            _write_dynamic_csv_rows(path_risk_path, report.path_risk_diagnostics)
+            _write_dynamic_csv_rows(threshold_path, report.path_risk_threshold_summary)
+            paths.extend([str(path_risk_path), str(threshold_path)])
         return report.model_copy(update={"artifact_paths": paths})
 
     def _evaluate_closed_bar(
@@ -1299,6 +1306,238 @@ def _forward_path_row(
     }
 
 
+def path_risk_diagnostic_rows(
+    bars: Sequence[Bar],
+    trades: Sequence[BacktestTrade],
+    *,
+    horizons: Sequence[int] = (1, 2, 4, 8, 16),
+    favorable_thresholds: Sequence[float] = (0.5, 1.0, 1.5, 2.0),
+    adverse_thresholds: Sequence[float] = (0.5, 1.0, 1.5, 2.0),
+    trailing_givebacks: Sequence[float] = (0.5, 1.0),
+) -> list[dict[str, object]]:
+    """Return offline path-risk labels for completed trades."""
+
+    rows: list[dict[str, object]] = []
+    for trade in trades:
+        entry_index = _trade_entry_index(trade, bars)
+        entry_atr = _entry_atr(trade)
+        for horizon in horizons:
+            rows.append(
+                _path_risk_row(
+                    bars,
+                    trade,
+                    entry_index=entry_index,
+                    entry_atr=entry_atr,
+                    horizon=int(horizon),
+                    favorable_thresholds=favorable_thresholds,
+                    adverse_thresholds=adverse_thresholds,
+                    trailing_givebacks=trailing_givebacks,
+                )
+            )
+    return rows
+
+
+def _entry_atr(trade: BacktestTrade) -> float | None:
+    raw = trade.metadata.get("feature_atr")
+    if isinstance(raw, int | float) and raw > 0:
+        return float(raw)
+    return None
+
+
+def _path_risk_row(
+    bars: Sequence[Bar],
+    trade: BacktestTrade,
+    *,
+    entry_index: int | None,
+    entry_atr: float | None,
+    horizon: int,
+    favorable_thresholds: Sequence[float],
+    adverse_thresholds: Sequence[float],
+    trailing_givebacks: Sequence[float],
+) -> dict[str, object]:
+    base: dict[str, object] = {
+        "trade_id": trade.trade_id,
+        "symbol": trade.symbol,
+        "side": trade.side.value,
+        "entry_time": trade.entry_time.isoformat(),
+        "entry_index": entry_index if entry_index is not None else "unavailable",
+        "entry_price": trade.entry_price,
+        "realized_exit_time": trade.exit_time.isoformat(),
+        "realized_exit_price": trade.exit_price,
+        "realized_net_pnl": trade.net_pnl,
+        "quantity": trade.quantity,
+        "level_price": trade.metadata.get("level_price", "unavailable"),
+        "horizon_bars": horizon,
+        "entry_atr": entry_atr if entry_atr is not None else "unavailable",
+    }
+    if entry_index is None:
+        return {**base, "available": False, "unavailable_reason": "missing_entry_index"}
+    if entry_atr is None:
+        return {**base, "available": False, "unavailable_reason": "missing_entry_atr"}
+    target_index = entry_index + horizon
+    if target_index >= len(bars):
+        return {**base, "available": False, "unavailable_reason": "insufficient_future_bars"}
+    path = bars[entry_index + 1 : target_index + 1]
+    if not path:
+        return {**base, "available": False, "unavailable_reason": "empty_forward_path"}
+
+    highs = [bar["high"] for bar in path]
+    lows = [bar["low"] for bar in path]
+    max_high = max(highs)
+    min_low = min(lows)
+    mfe = max_high - trade.entry_price
+    mae = min_low - trade.entry_price
+    row: dict[str, object] = {
+        **base,
+        "available": True,
+        "unavailable_reason": "",
+        "mfe": mfe,
+        "mae": mae,
+        "max_favorable_atr": mfe / entry_atr,
+        "max_adverse_atr": abs(mae) / entry_atr if mae < 0 else 0.0,
+    }
+    favorable_hits = _threshold_hits(path, trade.entry_price, entry_atr, favorable_thresholds, favorable=True)
+    adverse_hits = _threshold_hits(path, trade.entry_price, entry_atr, adverse_thresholds, favorable=False)
+    first_favorable = _first_hit(favorable_hits)
+    first_adverse = _first_hit(adverse_hits)
+    row.update(
+        {
+            "first_favorable_threshold_atr": first_favorable[0] if first_favorable is not None else "unavailable",
+            "first_favorable_hit_bars": first_favorable[1] if first_favorable is not None else "unavailable",
+            "first_adverse_threshold_atr": first_adverse[0] if first_adverse is not None else "unavailable",
+            "first_adverse_hit_bars": first_adverse[1] if first_adverse is not None else "unavailable",
+        }
+    )
+    for threshold in favorable_thresholds:
+        key = _threshold_key(threshold)
+        hit = favorable_hits.get(float(threshold))
+        row[f"favorable_{key}_hit"] = hit is not None
+        row[f"favorable_{key}_hit_bars"] = hit if hit is not None else "unavailable"
+    for threshold in adverse_thresholds:
+        key = _threshold_key(threshold)
+        hit = adverse_hits.get(float(threshold))
+        row[f"adverse_{key}_hit"] = hit is not None
+        row[f"adverse_{key}_hit_bars"] = hit if hit is not None else "unavailable"
+    for favorable in favorable_thresholds:
+        f_key = _threshold_key(favorable)
+        f_hit = favorable_hits.get(float(favorable))
+        for adverse in adverse_thresholds:
+            a_key = _threshold_key(adverse)
+            a_hit = adverse_hits.get(float(adverse))
+            row[f"fav_{f_key}_before_adv_{a_key}"] = _hit_before(f_hit, a_hit)
+            row[f"adv_{a_key}_before_fav_{f_key}"] = _hit_before(a_hit, f_hit)
+    breakeven_hit = favorable_hits.get(1.0)
+    row["breakeven_reachable"] = breakeven_hit is not None
+    row["breakeven_reached_bars"] = breakeven_hit if breakeven_hit is not None else "unavailable"
+    row["breakeven_touched_after_reach"] = _breakeven_touched_after(path, trade.entry_price, breakeven_hit)
+    for favorable in favorable_thresholds:
+        f_key = _threshold_key(favorable)
+        f_hit = favorable_hits.get(float(favorable))
+        for giveback in trailing_givebacks:
+            g_key = _threshold_key(giveback)
+            row[f"trail_after_fav_{f_key}_giveback_{g_key}_touched"] = _trailing_touched_after(
+                path,
+                trade.entry_price,
+                entry_atr,
+                f_hit,
+                float(giveback),
+            )
+    return row
+
+
+def _threshold_hits(
+    path: Sequence[Bar],
+    entry_price: float,
+    entry_atr: float,
+    thresholds: Sequence[float],
+    *,
+    favorable: bool,
+) -> dict[float, int]:
+    hits: dict[float, int] = {}
+    for offset, bar in enumerate(path, start=1):
+        value = bar["high"] - entry_price if favorable else entry_price - bar["low"]
+        multiple = value / entry_atr
+        for threshold in thresholds:
+            threshold_value = float(threshold)
+            if threshold_value not in hits and multiple >= threshold_value:
+                hits[threshold_value] = offset
+    return hits
+
+
+def _first_hit(hits: Mapping[float, int]) -> tuple[float, int] | None:
+    if not hits:
+        return None
+    return min(hits.items(), key=lambda item: (item[1], item[0]))
+
+
+def _hit_before(first: int | None, second: int | None) -> bool | str:
+    if first is None:
+        return False
+    if second is None:
+        return True
+    if first == second:
+        return "same_bar"
+    return first < second
+
+
+def _breakeven_touched_after(path: Sequence[Bar], entry_price: float, reached_offset: int | None) -> bool | str:
+    if reached_offset is None:
+        return "unavailable"
+    return any(bar["low"] <= entry_price for bar in path[reached_offset:])
+
+
+def _trailing_touched_after(
+    path: Sequence[Bar],
+    entry_price: float,
+    entry_atr: float,
+    reached_offset: int | None,
+    giveback_atr: float,
+) -> bool | str:
+    if reached_offset is None:
+        return "unavailable"
+    max_high = entry_price
+    for bar in path[reached_offset - 1 :]:
+        max_high = max(max_high, bar["high"])
+        trailing_level = max_high - giveback_atr * entry_atr
+        if bar["low"] <= trailing_level:
+            return True
+    return False
+
+
+def _threshold_key(value: float) -> str:
+    return str(value).replace(".", "p")
+
+
+def path_risk_threshold_summary(rows: Sequence[dict[str, object]]) -> list[dict[str, object]]:
+    """Aggregate path-risk labels separately from realized backtest metrics."""
+
+    grouped: dict[int, list[dict[str, object]]] = defaultdict(list)
+    for row in rows:
+        horizon = row.get("horizon_bars")
+        if isinstance(horizon, int):
+            grouped[horizon].append(row)
+    summaries: list[dict[str, object]] = []
+    for horizon in sorted(grouped):
+        horizon_rows = grouped[horizon]
+        available = [row for row in horizon_rows if row.get("available") is True]
+        unavailable = len(horizon_rows) - len(available)
+        summaries.append(
+            {
+                "horizon_bars": horizon,
+                "trade_count": len(horizon_rows),
+                "available_count": len(available),
+                "unavailable_count": unavailable,
+                "average_max_favorable_atr": _mean_numeric(available, "max_favorable_atr"),
+                "median_max_favorable_atr": _median_numeric(available, "max_favorable_atr"),
+                "average_max_adverse_atr": _mean_numeric(available, "max_adverse_atr"),
+                "median_max_adverse_atr": _median_numeric(available, "max_adverse_atr"),
+                "breakeven_reachable_ratio": _true_ratio(available, "breakeven_reachable"),
+                "breakeven_touched_after_reach_ratio": _true_ratio(available, "breakeven_touched_after_reach"),
+            }
+        )
+    return summaries
+
+
 def holding_horizon_summary(rows: Sequence[dict[str, object]]) -> list[dict[str, object]]:
     """Aggregate synthetic holding-horizon labels without changing realized metrics."""
 
@@ -1346,6 +1585,15 @@ def _mean_numeric(rows: Sequence[dict[str, object]], key: str) -> float | str:
     return sum(values) / len(values) if values else "unavailable"
 
 
+def _median_numeric(rows: Sequence[dict[str, object]], key: str) -> float | str:
+    values: list[float] = []
+    for row in rows:
+        value = row.get(key)
+        if isinstance(value, int | float):
+            values.append(float(value))
+    return statistics.median(values) if values else "unavailable"
+
+
 def _true_ratio(rows: Sequence[dict[str, object]], key: str) -> float | str:
     values = [row.get(key) for row in rows if isinstance(row.get(key), bool)]
     return sum(1 for value in values if value) / len(values) if values else "unavailable"
@@ -1388,6 +1636,8 @@ def build_report(
     slippages = [trade.slippage for trade in trades]
     forward_path_diagnostics: list[dict[str, object]] = []
     holding_horizon_diagnostics: list[dict[str, object]] = []
+    path_risk_diagnostics: list[dict[str, object]] = []
+    path_risk_summaries: list[dict[str, object]] = []
     if config.forward_path_diagnostics:
         forward_path_diagnostics = forward_path_diagnostic_rows(
             bars,
@@ -1395,6 +1645,16 @@ def build_report(
             horizons=config.forward_path_horizons,
         )
         holding_horizon_diagnostics = holding_horizon_summary(forward_path_diagnostics)
+    if config.path_risk_diagnostics:
+        path_risk_diagnostics = path_risk_diagnostic_rows(
+            bars,
+            trades,
+            horizons=config.forward_path_horizons,
+            favorable_thresholds=config.path_risk_favorable_atr_thresholds,
+            adverse_thresholds=config.path_risk_adverse_atr_thresholds,
+            trailing_givebacks=config.path_risk_trailing_giveback_atr,
+        )
+        path_risk_summaries = path_risk_threshold_summary(path_risk_diagnostics)
     return BacktestReport(
         run_id=run_id,
         config_hash=config_hash,
@@ -1418,6 +1678,8 @@ def build_report(
         monte_carlo=monte_carlo,
         forward_path_diagnostics=forward_path_diagnostics,
         holding_horizon_diagnostics=holding_horizon_diagnostics,
+        path_risk_diagnostics=path_risk_diagnostics,
+        path_risk_threshold_summary=path_risk_summaries,
     )
 
 

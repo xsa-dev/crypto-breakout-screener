@@ -12,6 +12,7 @@ from src.app.breakout.backtesting import (
     evaluate_production_oos_gate,
     feature_bucket_pnl,
     lifecycle_diagnostics,
+    path_risk_diagnostic_rows,
     regime_bucket_summary,
     score_bucket_pnl,
     stable_hash,
@@ -657,3 +658,49 @@ def test_forward_path_records_unavailable_horizons() -> None:
     assert horizon_summary[16]["unavailable_count"] == len(report.trades)
     assert horizon_summary[16]["available_count"] == 0
     assert horizon_summary[16]["average_forward_return"] == "unavailable"
+
+
+def test_path_risk_diagnostics_are_opt_in_and_do_not_change_trades(tmp_path) -> None:
+    bars = breakout_dataset()
+    base_report = BacktestEngine(config()).run(bars)
+    diagnostic_config = config().model_copy(update={"path_risk_diagnostics": True})
+    diagnostic_engine = BacktestEngine(diagnostic_config)
+    diagnostic_report = diagnostic_engine.run(bars)
+
+    assert [(trade.entry_time, trade.exit_time, trade.entry_price, trade.exit_price) for trade in diagnostic_report.trades] == [
+        (trade.entry_time, trade.exit_time, trade.entry_price, trade.exit_price) for trade in base_report.trades
+    ]
+    assert diagnostic_report.metrics == base_report.metrics
+    assert diagnostic_report.path_risk_diagnostics
+    first = diagnostic_report.path_risk_diagnostics[0]
+    assert first["available"] is True
+    assert first["horizon_bars"] == 1
+    assert first["entry_atr"] != "unavailable"
+    assert first["favorable_0p5_hit"] is True
+    assert first["adverse_0p5_hit"] in {True, False}
+    assert first["fav_1p0_before_adv_1p0"] in {True, False, "same_bar"}
+    assert first["breakeven_reachable"] in {True, False}
+    assert "trail_after_fav_1p0_giveback_0p5_touched" in first
+
+    exported = diagnostic_engine.export_report(diagnostic_report, tmp_path)
+    assert any(path.endswith("-path-risk-diagnostics.csv") for path in exported.artifact_paths)
+    assert any(path.endswith("-path-risk-threshold-summary.csv") for path in exported.artifact_paths)
+
+
+def test_path_risk_records_missing_atr_and_insufficient_future_bars() -> None:
+    bars = breakout_dataset()
+    report = BacktestEngine(
+        config().model_copy(update={"path_risk_diagnostics": True, "forward_path_horizons": (1, 16)})
+    ).run(bars)
+    missing_atr_trade = report.trades[0].model_copy(
+        update={"metadata": {**report.trades[0].metadata, "feature_atr": "unavailable"}}
+    )
+    custom_report = BacktestEngine(
+        config().model_copy(update={"path_risk_diagnostics": True, "forward_path_horizons": (1,)})
+    ).run(bars)
+    # Directly verify generated labels by rebuilding through a tiny exported report copy.
+    assert any(row["unavailable_reason"] == "insufficient_future_bars" for row in report.path_risk_diagnostics)
+    rows = path_risk_diagnostic_rows(bars, [missing_atr_trade], horizons=(1,))
+    assert rows[0]["available"] is False
+    assert rows[0]["unavailable_reason"] == "missing_entry_atr"
+    assert custom_report.path_risk_threshold_summary
