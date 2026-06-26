@@ -108,6 +108,45 @@ def test_batch_runner_records_conservative_gate_profile(tmp_path) -> None:
     assert seen_gates[0]["cooldown_bars_after_loss"] == 6
 
 
+
+def test_batch_runner_records_feature_filter_profile(tmp_path) -> None:
+    windows = [
+        BatchWindow(
+            label="filtered",
+            start=datetime(2024, 1, 1, tzinfo=UTC),
+            end=datetime(2024, 1, 2, tzinfo=UTC),
+        )
+    ]
+    seen_filters: list[dict[str, Any]] = []
+
+    def run_single(**kwargs: Any) -> CryptoExperimentResult:
+        seen_filters.append(kwargs["feature_filters"].model_dump(mode="json"))
+        return _fake_run_factory(tmp_path)(**kwargs)
+
+    result = run_batch_experiment(
+        windows=windows,
+        output_dir=tmp_path / "backtests",
+        market_data_dir=tmp_path / "market-data",
+        gate_profile="conservative-v1-m15-slope-positive",
+        download=_fake_download_factory(tmp_path),
+        run_single=run_single,
+    )
+
+    row = result.summary.windows[0]
+    assert result.summary.gate_profile == "conservative-v1-m15-slope-positive"
+    assert result.summary.feature_filter_profile == "conservative-v1-m15-slope-positive"
+    assert row.feature_filter_profile == "conservative-v1-m15-slope-positive"
+    assert row.gate_settings["block_immediate_reentry"] is True
+    assert row.feature_filter_settings["require_m15_ema_slope_positive"] is True
+    assert row.feature_filter_skip_counts == {"skipped_feature_m15_ema_slope_not_positive": 3}
+    assert seen_filters[0]["require_m15_ema_slope_positive"] is True
+
+    with result.summary_csv_path.open(newline="", encoding="utf-8") as file:
+        rows = list(csv.DictReader(file))
+    assert rows[0]["feature_filter_profile"] == "conservative-v1-m15-slope-positive"
+    assert json.loads(rows[0]["feature_filter_settings_json"])["require_m15_ema_slope_positive"] is True
+    assert json.loads(rows[0]["feature_filter_skip_counts_json"]) == {"skipped_feature_m15_ema_slope_not_positive": 3}
+
 def test_batch_verdict_blocks_failed_thresholds(tmp_path) -> None:
     windows = [
         BatchWindow(
@@ -244,6 +283,7 @@ def _fake_run_factory(
         feature_bucket_path = artifact_dir / f"{run_id}-feature-bucket-pnl.csv"
         regime_bucket_path = artifact_dir / f"{run_id}-regime-bucket-summary.csv"
         worst_day_path = artifact_dir / f"{run_id}-worst-day-attribution.csv"
+        parameters_path = artifact_dir / f"{run_id}-parameters.json"
         metrics_path.write_text(
             "metric,value\n"
             "trade_count,10\n"
@@ -269,6 +309,18 @@ def _fake_run_factory(
             ),
             encoding="utf-8",
         )
+        parameters_path.write_text(
+            json.dumps(
+                {
+                    "feature_filters": kwargs["feature_filters"].model_dump(mode="json"),
+                    "research_gate_skip_counts": {
+                        "skipped_feature_m15_ema_slope_not_positive": 3,
+                    },
+                },
+                sort_keys=True,
+            ),
+            encoding="utf-8",
+        )
         return CryptoExperimentResult(
             run_id=run_id,
             symbol="BTCUSDT",
@@ -288,6 +340,7 @@ def _fake_run_factory(
                 str(feature_bucket_path),
                 str(regime_bucket_path),
                 str(worst_day_path),
+                str(parameters_path),
                 str(manifest_path),
             ],
         )

@@ -359,6 +359,10 @@ class BacktestEngine:
         if score_blocker is not None:
             gate_state.skip_counts[score_blocker] += 1
             return None
+        feature_blocker = self._feature_filter_reason(feature_snapshot)
+        if feature_blocker is not None:
+            gate_state.skip_counts[feature_blocker] += 1
+            return None
         stop_price = current["close"] - self.config.stop_distance
         market = MarketSnapshot(
             symbol=current["symbol"],
@@ -520,6 +524,26 @@ class BacktestEngine:
         if gates.daily_stop_loss is not None:
             if gate_state.pnl_by_day.get(day_key, 0.0) <= -gates.daily_stop_loss:
                 return "skipped_daily_stop_loss"
+        return None
+
+    def _feature_filter_reason(
+        self,
+        feature_snapshot: Mapping[str, float | int | str | bool],
+    ) -> str | None:
+        filters = self.config.feature_filters
+        if filters.require_m15_ema_slope_positive:
+            slope = feature_snapshot.get("feature_ema_slope_atr")
+            if not isinstance(slope, int | float) or slope <= 0:
+                return "skipped_feature_m15_ema_slope_not_positive"
+        if filters.require_h1_trend_long:
+            if feature_snapshot.get("feature_context_H1_trend_alignment") != "long":
+                return "skipped_feature_h1_trend_not_long"
+        if filters.max_candle_body_ratio is not None:
+            body_ratio = feature_snapshot.get("feature_candle_body_range_ratio")
+            if not isinstance(body_ratio, int | float):
+                return "skipped_feature_candle_body_ratio_unavailable"
+            if body_ratio > filters.max_candle_body_ratio:
+                return "skipped_feature_candle_body_ratio_above_cap"
         return None
 
     def _update_gate_state(
@@ -940,10 +964,14 @@ def _atr_percentile(
     if current_atr is None or len(history) < atr_period:
         return "unavailable"
     sample = history[-(rank_window + atr_period) :]
+    true_ranges: list[float] = []
+    previous_close: float | None = None
+    for bar in sample:
+        true_ranges.append(_true_range(bar, previous_close))
+        previous_close = bar["close"]
     atr_values = [
-        atr
-        for index in range(atr_period, len(sample) + 1)
-        if (atr := _atr_from_bars(sample[:index], period=atr_period)) is not None
+        sum(true_ranges[index - atr_period : index]) / atr_period
+        for index in range(atr_period, len(true_ranges) + 1)
     ]
     if not atr_values:
         return "unavailable"

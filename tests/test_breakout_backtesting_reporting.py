@@ -21,6 +21,7 @@ from src.app.breakout.backtesting import (
 from src.core.models import (
     BacktestConfig,
     BacktestCostModel,
+    BacktestFeatureFilterConfig,
     BacktestResearchGateConfig,
     BreakoutStrategyConfig,
     ProductionOosThresholds,
@@ -429,3 +430,44 @@ def test_feature_bucket_regime_and_worst_day_diagnostics_are_deterministic() -> 
     assert first_buckets == second_buckets
     assert regime_bucket_summary(report.trades)
     assert worst_day_attribution(report.trades)
+
+
+def test_feature_filters_disabled_preserve_trade_selection() -> None:
+    base_report = BacktestEngine(config()).run(breakout_dataset())
+    filtered_config = config().model_copy(update={"feature_filters": BacktestFeatureFilterConfig()})
+    filtered_report = BacktestEngine(filtered_config).run(breakout_dataset())
+
+    assert [trade.trade_id for trade in filtered_report.trades] == [trade.trade_id for trade in base_report.trades]
+    assert filtered_report.metrics == base_report.metrics
+    assert filtered_report.parameter_snapshot["research_gate_skip_counts"] == {}
+
+
+def test_m15_ema_slope_filter_skips_non_positive_slope() -> None:
+    engine = BacktestEngine(config().model_copy(update={
+        "feature_filters": BacktestFeatureFilterConfig(require_m15_ema_slope_positive=True)
+    }))
+
+    assert engine._feature_filter_reason({"feature_ema_slope_atr": "unavailable"}) == "skipped_feature_m15_ema_slope_not_positive"
+    assert engine._feature_filter_reason({"feature_ema_slope_atr": 0.0}) == "skipped_feature_m15_ema_slope_not_positive"
+    assert engine._feature_filter_reason({"feature_ema_slope_atr": -0.1}) == "skipped_feature_m15_ema_slope_not_positive"
+    assert engine._feature_filter_reason({"feature_ema_slope_atr": 0.1}) is None
+
+
+def test_h1_long_filter_skips_missing_or_short_context() -> None:
+    engine = BacktestEngine(config().model_copy(update={
+        "feature_filters": BacktestFeatureFilterConfig(require_h1_trend_long=True)
+    }))
+
+    assert engine._feature_filter_reason({"feature_context_H1_trend_alignment": "unavailable"}) == "skipped_feature_h1_trend_not_long"
+    assert engine._feature_filter_reason({"feature_context_H1_trend_alignment": "short_or_flat"}) == "skipped_feature_h1_trend_not_long"
+    assert engine._feature_filter_reason({"feature_context_H1_trend_alignment": "long"}) is None
+
+
+def test_candle_body_cap_filter_skips_unavailable_and_above_cap() -> None:
+    engine = BacktestEngine(config().model_copy(update={
+        "feature_filters": BacktestFeatureFilterConfig(max_candle_body_ratio=0.75)
+    }))
+
+    assert engine._feature_filter_reason({"feature_candle_body_range_ratio": "unavailable"}) == "skipped_feature_candle_body_ratio_unavailable"
+    assert engine._feature_filter_reason({"feature_candle_body_range_ratio": 0.8}) == "skipped_feature_candle_body_ratio_above_cap"
+    assert engine._feature_filter_reason({"feature_candle_body_range_ratio": 0.75}) is None

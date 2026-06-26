@@ -404,6 +404,22 @@ class BacktestResearchGateConfig(BaseModel):
     daily_stop_loss: float | None = Field(default=None, gt=0)
 
 
+class BacktestFeatureFilterConfig(BaseModel):
+    """Disabled-by-default local research filters for feature-profile comparisons."""
+
+    require_m15_ema_slope_positive: bool = False
+    require_h1_trend_long: bool = False
+    max_candle_body_ratio: float | None = Field(default=None, gt=0)
+
+    @property
+    def configured(self) -> bool:
+        return bool(
+            self.require_m15_ema_slope_positive
+            or self.require_h1_trend_long
+            or self.max_candle_body_ratio is not None
+        )
+
+
 class BacktestConfig(BaseModel):
     """Deterministic local backtest configuration."""
 
@@ -414,6 +430,7 @@ class BacktestConfig(BaseModel):
     random_seed: int = 0
     cost_model: BacktestCostModel = Field(default_factory=BacktestCostModel)
     research_gates: BacktestResearchGateConfig = Field(default_factory=BacktestResearchGateConfig)
+    feature_filters: BacktestFeatureFilterConfig = Field(default_factory=BacktestFeatureFilterConfig)
     strategy: BreakoutStrategyConfig = Field(default_factory=BreakoutStrategyConfig)
     export_parquet: bool = False
 

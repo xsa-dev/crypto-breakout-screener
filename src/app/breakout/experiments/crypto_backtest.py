@@ -28,6 +28,7 @@ from src.core.enums import TimeFrame
 from src.core.models import (
     BacktestConfig,
     BacktestCostModel,
+    BacktestFeatureFilterConfig,
     BacktestResearchGateConfig,
     BreakoutStrategyConfig,
     ScoreConfig,
@@ -275,6 +276,7 @@ def run_crypto_experiment(
     min_warmup_bars: int = 7,
     random_seed: int = 42,
     research_gates: BacktestResearchGateConfig | None = None,
+    feature_filters: BacktestFeatureFilterConfig | None = None,
 ) -> CryptoExperimentResult:
     """Run the first BTCUSDT crypto historical experiment and write local artifacts."""
 
@@ -314,6 +316,7 @@ def run_crypto_experiment(
             funding_per_bar=funding_per_bar,
         ),
         research_gates=research_gates or BacktestResearchGateConfig(),
+        feature_filters=feature_filters or BacktestFeatureFilterConfig(),
         strategy=BreakoutStrategyConfig(
             symbols=[symbol],
             execution_timeframe=TimeFrame.M15,
