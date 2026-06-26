@@ -463,6 +463,25 @@ class BacktestConfirmationFilterConfig(BaseModel):
         return self
 
 
+class BacktestExitProfileConfig(BaseModel):
+    """Disabled-by-default local research exit profiles."""
+
+    fixed_holding_bars: int = Field(default=1, ge=1, le=16)
+    stop_atr: float | None = Field(default=None, gt=0)
+    target_atr: float | None = Field(default=None, gt=0)
+
+    @property
+    def configured(self) -> bool:
+        return self.fixed_holding_bars != 1 or self.stop_atr is not None or self.target_atr is not None
+
+    @model_validator(mode="after")
+    def validate_exit_profile(self) -> "BacktestExitProfileConfig":
+        if (self.stop_atr is None) != (self.target_atr is None):
+            msg = "stop_atr and target_atr must be configured together"
+            raise ValueError(msg)
+        return self
+
+
 class BacktestConfig(BaseModel):
     """Deterministic local backtest configuration."""
 
@@ -477,6 +496,7 @@ class BacktestConfig(BaseModel):
     confirmation_filters: BacktestConfirmationFilterConfig = Field(
         default_factory=BacktestConfirmationFilterConfig
     )
+    exit_profile: BacktestExitProfileConfig = Field(default_factory=BacktestExitProfileConfig)
     strategy: BreakoutStrategyConfig = Field(default_factory=BreakoutStrategyConfig)
     export_parquet: bool = False
     forward_path_diagnostics: bool = False

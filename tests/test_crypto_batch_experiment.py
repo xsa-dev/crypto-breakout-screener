@@ -13,6 +13,7 @@ from src.app.breakout.experiments.crypto_backtest import (
 from src.app.breakout.experiments.crypto_batch import (
     BatchWindow,
     ResearchThresholds,
+    exit_profile_config,
     parse_windows,
     run_batch_experiment,
 )
@@ -315,6 +316,60 @@ def test_batch_runner_records_confirmation_filter_profile(tmp_path) -> None:
 
 
 
+def test_batch_runner_records_exit_profile(tmp_path) -> None:
+    windows = [
+        BatchWindow(
+            label="exit",
+            start=datetime(2024, 1, 1, tzinfo=UTC),
+            end=datetime(2024, 1, 2, tzinfo=UTC),
+        )
+    ]
+    seen_exit_profiles: list[dict[str, Any]] = []
+
+    def run_single(**kwargs: Any) -> CryptoExperimentResult:
+        seen_exit_profiles.append(kwargs["exit_profile"].model_dump(mode="json"))
+        return _fake_run_factory(tmp_path)(**kwargs)
+
+    profile = "conservative-v1-m15-slope-positive-max-trades-8-atr-stop-1p0-target-1p5"
+    result = run_batch_experiment(
+        windows=windows,
+        output_dir=tmp_path / "backtests",
+        market_data_dir=tmp_path / "market-data",
+        gate_profile=profile,
+        download=_fake_download_factory(tmp_path),
+        run_single=run_single,
+    )
+
+    row = result.summary.windows[0]
+    assert result.summary.exit_profile == profile
+    assert row.exit_profile == profile
+    assert row.exit_profile_settings == {
+        "fixed_holding_bars": 4,
+        "stop_atr": 1.0,
+        "target_atr": 1.5,
+    }
+    assert seen_exit_profiles == [row.exit_profile_settings]
+    assert exit_profile_config(profile).model_dump(mode="json") == row.exit_profile_settings
+
+    with result.summary_csv_path.open(newline="", encoding="utf-8") as file:
+        rows = list(csv.DictReader(file))
+    assert rows[0]["exit_profile"] == profile
+    assert json.loads(rows[0]["exit_profile_settings_json"]) == row.exit_profile_settings
+    assert json.loads(rows[0]["exit_profile_counts_json"]) == row.exit_profile_counts
+
+    summary = json.loads(result.summary_json_path.read_text(encoding="utf-8"))
+    assert summary["exit_profile"] == profile
+    assert summary["exit_profile_settings"] == row.exit_profile_settings
+
+    tight_stop_profile = "conservative-v1-m15-slope-positive-max-trades-8-atr-stop-0p01-target-2p0"
+    assert exit_profile_config(tight_stop_profile).model_dump(mode="json") == {
+        "fixed_holding_bars": 1,
+        "stop_atr": 0.01,
+        "target_atr": 2.0,
+    }
+
+
+
 def test_batch_runner_writes_bad_regime_diagnostics_for_failed_windows(tmp_path) -> None:
     windows = [
         BatchWindow(
@@ -605,6 +660,8 @@ def _fake_run_factory(
                 {
                     "feature_filters": kwargs["feature_filters"].model_dump(mode="json"),
                     "confirmation_filters": kwargs["confirmation_filters"].model_dump(mode="json"),
+                    "exit_profile": kwargs["exit_profile"].model_dump(mode="json"),
+                    "exit_profile_counts": {"fixed_holding_close": 10},
                     "research_gate_skip_counts": {
                         "skipped_confirmation_close_not_above_breakout": 17,
                         "skipped_confirmation_close_position_below_min": 19,

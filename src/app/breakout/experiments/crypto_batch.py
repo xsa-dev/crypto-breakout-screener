@@ -31,6 +31,7 @@ from src.app.breakout.normalizer import to_utc
 from src.core.enums import TimeFrame
 from src.core.models import (
     BacktestConfirmationFilterConfig,
+    BacktestExitProfileConfig,
     BacktestFeatureFilterConfig,
     BacktestResearchGateConfig,
 )
@@ -44,6 +45,7 @@ BATCH_SUMMARY_COLUMNS = [
     "risk_control_profile",
     "regime_filter_profile",
     "confirmation_filter_profile",
+    "exit_profile",
     "status",
     "blockers",
     "run_id",
@@ -69,6 +71,8 @@ BATCH_SUMMARY_COLUMNS = [
     "regime_filter_skip_counts_json",
     "confirmation_filter_settings_json",
     "confirmation_filter_skip_counts_json",
+    "exit_profile_settings_json",
+    "exit_profile_counts_json",
     "feature_artifact_paths_json",
     "downloaded_csv_paths_json",
     "manifest_path",
@@ -115,6 +119,7 @@ class BatchWindowSummary(BaseModel):
     risk_control_profile: str = "none"
     regime_filter_profile: str = "none"
     confirmation_filter_profile: str = "none"
+    exit_profile: str = "none"
     status: Literal["passed", "failed", "blocked"]
     blockers: list[str] = Field(default_factory=list)
     run_id: str | None = None
@@ -140,6 +145,8 @@ class BatchWindowSummary(BaseModel):
     regime_filter_skip_counts: dict[str, int] = Field(default_factory=dict)
     confirmation_filter_settings: dict[str, Any] = Field(default_factory=dict)
     confirmation_filter_skip_counts: dict[str, int] = Field(default_factory=dict)
+    exit_profile_settings: dict[str, Any] = Field(default_factory=dict)
+    exit_profile_counts: dict[str, int] = Field(default_factory=dict)
     feature_artifact_paths: dict[str, str] = Field(default_factory=dict)
     downloaded_csv_paths: dict[str, str] = Field(default_factory=dict)
     manifest_path: str | None = None
@@ -179,11 +186,13 @@ class BatchExperimentSummary(BaseModel):
     risk_control_profile: str = "none"
     regime_filter_profile: str = "none"
     confirmation_filter_profile: str = "none"
+    exit_profile: str = "none"
     gate_settings: dict[str, Any] = Field(default_factory=dict)
     feature_filter_settings: dict[str, Any] = Field(default_factory=dict)
     risk_control_settings: dict[str, Any] = Field(default_factory=dict)
     regime_filter_settings: dict[str, Any] = Field(default_factory=dict)
     confirmation_filter_settings: dict[str, Any] = Field(default_factory=dict)
+    exit_profile_settings: dict[str, Any] = Field(default_factory=dict)
     context_timeframes: list[str] = Field(default_factory=lambda: ["H1", "H4", "D1"])
     windows: list[BatchWindowSummary]
     aggregate: BatchAggregate
@@ -229,6 +238,14 @@ QUARTERLY_2023_2024_WINDOWS = (
     BatchWindow(label="2024q4", start=_dt("2024-10-01T00:00:00Z"), end=_dt("2025-01-01T00:00:00Z")),
 )
 
+EXIT_PROFILE_NAMES = {
+    "conservative-v1-m15-slope-positive-max-trades-8-hold-2",
+    "conservative-v1-m15-slope-positive-max-trades-8-hold-4",
+    "conservative-v1-m15-slope-positive-max-trades-8-atr-stop-0p01-target-2p0",
+    "conservative-v1-m15-slope-positive-max-trades-8-atr-stop-1p0-target-1p5",
+    "conservative-v1-m15-slope-positive-max-trades-8-atr-stop-1p5-target-2p0",
+}
+
 
 def research_gate_profile(name: str) -> BacktestResearchGateConfig:
     """Return named local research gates for overtrading comparison runs."""
@@ -253,6 +270,7 @@ def research_gate_profile(name: str) -> BacktestResearchGateConfig:
         "conservative-v1-m15-slope-positive-max-trades-8-confirm-close-1-closepos70",
         "conservative-v1-m15-slope-positive-max-trades-8-confirm-close-1-no-return-inside-range",
         "conservative-v1-m15-slope-positive-loss-cooldown-12",
+        *EXIT_PROFILE_NAMES,
     }:
         daily_stop_loss = 5_000.0
         max_trades_per_day = 12
@@ -320,6 +338,7 @@ def feature_filter_profile(name: str) -> BacktestFeatureFilterConfig:
         "conservative-v1-m15-slope-positive-max-trades-8-confirm-close-1-closepos70",
         "conservative-v1-m15-slope-positive-max-trades-8-confirm-close-1-no-return-inside-range",
         "conservative-v1-m15-slope-positive-loss-cooldown-12",
+        *EXIT_PROFILE_NAMES,
     }:
         return BacktestFeatureFilterConfig(require_m15_ema_slope_positive=True)
     if name == "conservative-v1-h1-long":
@@ -358,6 +377,7 @@ def _feature_filter_profile_name(gate_profile: str, explicit: str | None = None)
         "conservative-v1-m15-slope-positive-max-trades-8-confirm-close-1-closepos70",
         "conservative-v1-m15-slope-positive-max-trades-8-confirm-close-1-no-return-inside-range",
         "conservative-v1-m15-slope-positive-loss-cooldown-12",
+        *EXIT_PROFILE_NAMES,
     }:
         if gate_profile.startswith("conservative-v1-m15-slope-positive-"):
             return "conservative-v1-m15-slope-positive"
@@ -372,6 +392,7 @@ def _risk_control_profile_name(gate_profile: str) -> str:
         "conservative-v1-m15-slope-positive-daily-stop-3000",
         "conservative-v1-m15-slope-positive-daily-stop-2000",
         "conservative-v1-m15-slope-positive-loss-cooldown-12",
+        *EXIT_PROFILE_NAMES,
     }:
         return gate_profile
     return "none"
@@ -435,6 +456,30 @@ def _confirmation_filter_profile_name(gate_profile: str) -> str:
     return "none"
 
 
+def exit_profile_config(name: str) -> BacktestExitProfileConfig:
+    """Return named local exit profiles for path-risk comparison runs."""
+
+    if name in {"baseline", "conservative-v1", "none"}:
+        return BacktestExitProfileConfig()
+    if name == "conservative-v1-m15-slope-positive-max-trades-8-hold-2":
+        return BacktestExitProfileConfig(fixed_holding_bars=2)
+    if name == "conservative-v1-m15-slope-positive-max-trades-8-hold-4":
+        return BacktestExitProfileConfig(fixed_holding_bars=4)
+    if name == "conservative-v1-m15-slope-positive-max-trades-8-atr-stop-0p01-target-2p0":
+        return BacktestExitProfileConfig(fixed_holding_bars=1, stop_atr=0.01, target_atr=2.0)
+    if name == "conservative-v1-m15-slope-positive-max-trades-8-atr-stop-1p0-target-1p5":
+        return BacktestExitProfileConfig(fixed_holding_bars=4, stop_atr=1.0, target_atr=1.5)
+    if name == "conservative-v1-m15-slope-positive-max-trades-8-atr-stop-1p5-target-2p0":
+        return BacktestExitProfileConfig(fixed_holding_bars=8, stop_atr=1.5, target_atr=2.0)
+    return BacktestExitProfileConfig()
+
+
+def _exit_profile_name(gate_profile: str) -> str:
+    if gate_profile in EXIT_PROFILE_NAMES:
+        return gate_profile
+    return "none"
+
+
 def run_batch_experiment(
     *,
     windows: list[BatchWindow],
@@ -465,6 +510,7 @@ def run_batch_experiment(
     active_risk_control_profile = _risk_control_profile_name(gate_profile)
     active_regime_filter_profile = _regime_filter_profile_name(gate_profile)
     active_confirmation_filter_profile = _confirmation_filter_profile_name(gate_profile)
+    active_exit_profile = _exit_profile_name(gate_profile)
     active_gates = research_gates or research_gate_profile(gate_profile)
     active_feature_filters = feature_filters or feature_filter_profile(
         gate_profile if active_regime_filter_profile != "none" else active_feature_filter_profile
@@ -485,6 +531,10 @@ def run_batch_experiment(
         if active_confirmation_filter_profile != "none"
         else {}
     )
+    active_exit_config = exit_profile_config(active_exit_profile)
+    exit_profile_settings = (
+        active_exit_config.model_dump(mode="json") if active_exit_profile != "none" else {}
+    )
     batch_id = _batch_id(
         windows=windows,
         thresholds=active_thresholds,
@@ -498,6 +548,8 @@ def run_batch_experiment(
         regime_filter_settings=regime_filter_settings,
         confirmation_filter_profile=active_confirmation_filter_profile,
         confirmation_filter_settings=confirmation_filter_settings,
+        exit_profile=active_exit_profile,
+        exit_profile_settings=exit_profile_settings,
         bad_regime_diagnostics_enabled=enable_bad_regime_diagnostics,
         forward_path_diagnostics_enabled=enable_forward_path_diagnostics,
         path_risk_diagnostics_enabled=enable_path_risk_diagnostics,
@@ -519,9 +571,11 @@ def run_batch_experiment(
                 risk_control_profile=active_risk_control_profile,
                 regime_filter_profile=active_regime_filter_profile,
                 confirmation_filter_profile=active_confirmation_filter_profile,
+                exit_profile=active_exit_profile,
                 research_gates=active_gates,
                 feature_filters=active_feature_filters,
                 confirmation_filters=active_confirmation_filters,
+                exit_profile_config=active_exit_config,
                 forward_path_diagnostics=enable_forward_path_diagnostics,
                 path_risk_diagnostics=enable_path_risk_diagnostics,
                 download=download,
@@ -537,11 +591,13 @@ def run_batch_experiment(
                 risk_control_profile=active_risk_control_profile,
                 regime_filter_profile=active_regime_filter_profile,
                 confirmation_filter_profile=active_confirmation_filter_profile,
+                exit_profile=active_exit_profile,
                 gate_settings=gate_settings,
                 feature_filter_settings=feature_filter_settings,
                 risk_control_settings=risk_control_settings,
                 regime_filter_settings=regime_filter_settings,
                 confirmation_filter_settings=confirmation_filter_settings,
+                exit_profile_settings=exit_profile_settings,
                 status="failed",
                 blockers=[f"window_exception:{type(exc).__name__}:{exc}"],
             )
@@ -574,11 +630,13 @@ def run_batch_experiment(
         risk_control_profile=active_risk_control_profile,
         regime_filter_profile=active_regime_filter_profile,
         confirmation_filter_profile=active_confirmation_filter_profile,
+        exit_profile=active_exit_profile,
         gate_settings=gate_settings,
         feature_filter_settings=feature_filter_settings,
         risk_control_settings=risk_control_settings,
         regime_filter_settings=regime_filter_settings,
         confirmation_filter_settings=confirmation_filter_settings,
+        exit_profile_settings=exit_profile_settings,
         windows=rows,
         aggregate=aggregate,
         bad_regime_diagnostics_enabled=enable_bad_regime_diagnostics,
@@ -664,9 +722,11 @@ def _run_batch_window(
     risk_control_profile: str,
     regime_filter_profile: str,
     confirmation_filter_profile: str,
+    exit_profile: str,
     research_gates: BacktestResearchGateConfig,
     feature_filters: BacktestFeatureFilterConfig,
     confirmation_filters: BacktestConfirmationFilterConfig,
+    exit_profile_config: BacktestExitProfileConfig,
     forward_path_diagnostics: bool,
     path_risk_diagnostics: bool,
     download: DownloadCallable,
@@ -695,6 +755,7 @@ def _run_batch_window(
         research_gates=research_gates,
         feature_filters=feature_filters,
         confirmation_filters=confirmation_filters,
+        exit_profile=exit_profile_config,
         forward_path_diagnostics=forward_path_diagnostics,
         path_risk_diagnostics=path_risk_diagnostics,
     )
@@ -711,6 +772,7 @@ def _run_batch_window(
         risk_control_profile=risk_control_profile,
         regime_filter_profile=regime_filter_profile,
         confirmation_filter_profile=confirmation_filter_profile,
+        exit_profile=exit_profile,
         gate_settings=research_gates.model_dump(mode="json"),
         feature_filter_settings=feature_filters.model_dump(mode="json"),
         feature_filter_skip_counts=_feature_filter_skip_counts(result.artifact_dir / f"{result.run_id}-parameters.json"),
@@ -720,6 +782,8 @@ def _run_batch_window(
         regime_filter_skip_counts=_regime_filter_skip_counts(result.artifact_dir / f"{result.run_id}-parameters.json"),
         confirmation_filter_settings=confirmation_filters.model_dump(mode="json") if confirmation_filter_profile != "none" else {},
         confirmation_filter_skip_counts=_confirmation_filter_skip_counts(result.artifact_dir / f"{result.run_id}-parameters.json"),
+        exit_profile_settings=exit_profile_config.model_dump(mode="json") if exit_profile != "none" else {},
+        exit_profile_counts=_exit_profile_counts(result.artifact_dir / f"{result.run_id}-parameters.json"),
         status="passed",
         run_id=result.run_id,
         dataset_hash=result.dataset_hash,
@@ -879,6 +943,18 @@ def _confirmation_filter_skip_counts(path: Path) -> dict[str, int]:
         str(key): int(value)
         for key, value in raw_counts.items()
         if str(key).startswith("skipped_confirmation_") and isinstance(value, int | float)
+    }
+
+
+def _exit_profile_counts(path: Path) -> dict[str, int]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    raw_counts = payload.get("exit_profile_counts", {})
+    if not isinstance(raw_counts, dict):
+        return {}
+    return {
+        str(key): int(value)
+        for key, value in raw_counts.items()
+        if isinstance(value, int | float)
     }
 
 
@@ -1447,6 +1523,7 @@ def _csv_row(row: BatchWindowSummary) -> dict[str, str | int | float | None]:
         "risk_control_profile": row.risk_control_profile,
         "regime_filter_profile": row.regime_filter_profile,
         "confirmation_filter_profile": row.confirmation_filter_profile,
+        "exit_profile": row.exit_profile,
         "status": row.status,
         "blockers": ";".join(row.blockers),
         "run_id": row.run_id,
@@ -1472,6 +1549,8 @@ def _csv_row(row: BatchWindowSummary) -> dict[str, str | int | float | None]:
         "regime_filter_skip_counts_json": json.dumps(row.regime_filter_skip_counts, sort_keys=True),
         "confirmation_filter_settings_json": json.dumps(row.confirmation_filter_settings, sort_keys=True),
         "confirmation_filter_skip_counts_json": json.dumps(row.confirmation_filter_skip_counts, sort_keys=True),
+        "exit_profile_settings_json": json.dumps(row.exit_profile_settings, sort_keys=True),
+        "exit_profile_counts_json": json.dumps(row.exit_profile_counts, sort_keys=True),
         "feature_artifact_paths_json": json.dumps(row.feature_artifact_paths, sort_keys=True),
         "downloaded_csv_paths_json": json.dumps(row.downloaded_csv_paths, sort_keys=True),
         "manifest_path": row.manifest_path,
@@ -1531,6 +1610,8 @@ def _batch_id(
     regime_filter_settings: dict[str, Any] | None = None,
     confirmation_filter_profile: str = "none",
     confirmation_filter_settings: dict[str, Any] | None = None,
+    exit_profile: str = "none",
+    exit_profile_settings: dict[str, Any] | None = None,
     bad_regime_diagnostics_enabled: bool = False,
     forward_path_diagnostics_enabled: bool = False,
     path_risk_diagnostics_enabled: bool = False,
@@ -1551,6 +1632,8 @@ def _batch_id(
         "regime_filter_settings": regime_filter_settings or {},
         "confirmation_filter_profile": confirmation_filter_profile,
         "confirmation_filter_settings": confirmation_filter_settings or {},
+        "exit_profile": exit_profile,
+        "exit_profile_settings": exit_profile_settings or {},
         "bad_regime_diagnostics_enabled": bad_regime_diagnostics_enabled,
         "forward_path_diagnostics_enabled": forward_path_diagnostics_enabled,
         "path_risk_diagnostics_enabled": path_risk_diagnostics_enabled,
@@ -1634,6 +1717,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "conservative-v1-m15-slope-positive-max-trades-8-confirm-close-1-closepos70",
             "conservative-v1-m15-slope-positive-max-trades-8-confirm-close-1-no-return-inside-range",
             "conservative-v1-m15-slope-positive-loss-cooldown-12",
+            *sorted(EXIT_PROFILE_NAMES),
         ],
         default="baseline",
     )

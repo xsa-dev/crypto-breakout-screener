@@ -29,6 +29,7 @@ from src.core.models import (
     BacktestConfig,
     BacktestConfirmationFilterConfig,
     BacktestCostModel,
+    BacktestExitProfileConfig,
     BacktestFeatureFilterConfig,
     BacktestResearchGateConfig,
     BreakoutStrategyConfig,
@@ -279,6 +280,7 @@ def run_crypto_experiment(
     research_gates: BacktestResearchGateConfig | None = None,
     feature_filters: BacktestFeatureFilterConfig | None = None,
     confirmation_filters: BacktestConfirmationFilterConfig | None = None,
+    exit_profile: BacktestExitProfileConfig | None = None,
     forward_path_diagnostics: bool = False,
     path_risk_diagnostics: bool = False,
 ) -> CryptoExperimentResult:
@@ -322,6 +324,7 @@ def run_crypto_experiment(
         research_gates=research_gates or BacktestResearchGateConfig(),
         feature_filters=feature_filters or BacktestFeatureFilterConfig(),
         confirmation_filters=confirmation_filters or BacktestConfirmationFilterConfig(),
+        exit_profile=exit_profile or BacktestExitProfileConfig(),
         forward_path_diagnostics=forward_path_diagnostics,
         path_risk_diagnostics=path_risk_diagnostics,
         strategy=BreakoutStrategyConfig(

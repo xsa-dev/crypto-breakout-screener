@@ -23,6 +23,7 @@ from src.core.models import (
     BacktestConfig,
     BacktestConfirmationFilterConfig,
     BacktestCostModel,
+    BacktestExitProfileConfig,
     BacktestFeatureFilterConfig,
     BacktestResearchGateConfig,
     BreakoutStrategyConfig,
@@ -603,6 +604,98 @@ def test_confirmation_return_inside_range_cancels_candidate() -> None:
     assert confirmed_report.parameter_snapshot["research_gate_skip_counts"] == {
         "skipped_confirmation_returned_inside_range": 1
     }
+
+
+def test_exit_profile_fixed_holding_and_atr_thresholds_are_research_only() -> None:
+    bars = [*breakout_dataset(), make_bar(11, high=112.0, low=104.0, close=111.0)]
+    base_report = BacktestEngine(config()).run(bars)
+    hold_config = config().model_copy(
+        update={"exit_profile": BacktestExitProfileConfig(fixed_holding_bars=2)}
+    )
+    hold_report = BacktestEngine(hold_config).run(bars)
+
+    assert [trade.entry_time for trade in hold_report.trades] == [
+        trade.entry_time for trade in base_report.trades
+    ]
+    assert hold_report.trades[0].holding_bars == 2
+    assert hold_report.trades[0].exit_time == bars[9]["ts"]
+    assert hold_report.trades[0].metadata["exit_reason"] == "fixed_holding_close"
+    assert "fixed_holding_close" in str(hold_report.parameter_snapshot["exit_profile_counts"])
+
+    target_config = config().model_copy(
+        update={
+            "exit_profile": BacktestExitProfileConfig(
+                fixed_holding_bars=4,
+                stop_atr=1.0,
+                target_atr=1.5,
+            )
+        }
+    )
+    target_report = BacktestEngine(target_config).run(bars)
+    assert target_report.trades[0].metadata["exit_reason"] in {"atr_stop", "atr_target"}
+
+def test_exit_profile_uses_conservative_same_bar_stop_first() -> None:
+    bars = [
+        *breakout_dataset(),
+        make_bar(11, high=120.0, low=90.0, close=110.0),
+        make_bar(12, high=111.0, low=109.0, close=110.0),
+    ]
+    exit_config = config().model_copy(
+        update={
+            "exit_profile": BacktestExitProfileConfig(
+                fixed_holding_bars=4,
+                stop_atr=0.1,
+                target_atr=0.1,
+            )
+        }
+    )
+
+    report = BacktestEngine(exit_config).run(bars)
+
+    assert report.trades[0].metadata["exit_reason"] == "atr_stop"
+    assert report.trades[0].net_pnl < 0
+
+
+def test_exit_profile_missing_atr_and_no_threshold_hit_fall_back_to_max_hold() -> None:
+    future_bars = [
+        make_bar(8, high=107.2, low=106.8, close=107.0),
+        make_bar(9, high=107.3, low=106.9, close=107.1),
+        make_bar(10, high=107.4, low=107.0, close=107.2),
+        make_bar(11, high=107.5, low=107.1, close=107.3),
+    ]
+    engine = BacktestEngine(
+        config().model_copy(
+            update={
+                "exit_profile": BacktestExitProfileConfig(
+                    fixed_holding_bars=4,
+                    stop_atr=1.0,
+                    target_atr=1.5,
+                )
+            }
+        )
+    )
+
+    exit_bar, raw_exit_price, holding_bars, exit_reason = engine._resolve_exit(
+        entry_price=107.0,
+        next_bar=future_bars[0],
+        future_bars=future_bars,
+        feature_snapshot={"feature_atr": "unavailable"},
+    )
+    assert exit_bar == future_bars[3]
+    assert raw_exit_price == pytest.approx(107.3)
+    assert holding_bars == 4
+    assert exit_reason == "missing_entry_atr_fixed_holding_close"
+
+    exit_bar, raw_exit_price, holding_bars, exit_reason = engine._resolve_exit(
+        entry_price=107.0,
+        next_bar=future_bars[0],
+        future_bars=future_bars,
+        feature_snapshot={"feature_atr": 10.0},
+    )
+    assert exit_bar == future_bars[3]
+    assert raw_exit_price == pytest.approx(107.3)
+    assert holding_bars == 4
+    assert exit_reason == "fixed_holding_close"
 
 
 def test_forward_path_diagnostics_are_opt_in_and_do_not_change_trades(tmp_path) -> None:

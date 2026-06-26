@@ -124,6 +124,7 @@ class BacktestEngine:
                     pending_candidate,
                     current=current,
                     next_bar=next_bar,
+                    all_bars=ordered,
                     index=index,
                     config_hash=config_hash,
                     gate_state=gate_state,
@@ -133,6 +134,7 @@ class BacktestEngine:
                     history,
                     current,
                     next_bar,
+                    ordered,
                     index,
                     config_hash,
                     gate_state,
@@ -373,6 +375,7 @@ class BacktestEngine:
         history: Sequence[Bar],
         current: Bar,
         next_bar: Bar,
+        all_bars: Sequence[Bar],
         index: int,
         config_hash: str,
         gate_state: ResearchGateState,
@@ -441,11 +444,12 @@ class BacktestEngine:
                 candidate_bar=current,
                 feature_snapshot=feature_snapshot,
             )
-        return self._close_next_bar_trade(
+        return self._close_profile_trade(
             score=score,
             quantity=decision.quantity,
             current=current,
             next_bar=next_bar,
+            future_bars=all_bars[index + 1 : index + self.config.exit_profile.fixed_holding_bars + 1],
             index=index,
             config_hash=config_hash,
             level_price=level.price,
@@ -458,6 +462,7 @@ class BacktestEngine:
         *,
         current: Bar,
         next_bar: Bar,
+        all_bars: Sequence[Bar],
         index: int,
         config_hash: str,
         gate_state: ResearchGateState,
@@ -490,11 +495,12 @@ class BacktestEngine:
             }
         )
         return (
-            self._close_next_bar_trade(
+            self._close_profile_trade(
                 score=candidate.score,
                 quantity=candidate.quantity,
                 current=current,
                 next_bar=next_bar,
+                future_bars=all_bars[index + 1 : index + self.config.exit_profile.fixed_holding_bars + 1],
                 index=index,
                 config_hash=config_hash,
                 level_price=candidate.breakout_level,
@@ -504,13 +510,14 @@ class BacktestEngine:
         )
 
 
-    def _close_next_bar_trade(
+    def _close_profile_trade(
         self,
         *,
         score: BreakoutScore,
         quantity: float,
         current: Bar,
         next_bar: Bar,
+        future_bars: Sequence[Bar],
         index: int,
         config_hash: str,
         level_price: float,
@@ -518,33 +525,85 @@ class BacktestEngine:
     ) -> BacktestTrade:
         costs = self.config.cost_model
         entry_price = current["close"] + costs.spread / 2 + costs.slippage_per_unit
-        exit_price = next_bar["close"] - costs.spread / 2 - costs.slippage_per_unit
+        exit_bar, raw_exit_price, holding_bars, exit_reason = self._resolve_exit(
+            entry_price=entry_price,
+            next_bar=next_bar,
+            future_bars=future_bars,
+            feature_snapshot=feature_snapshot,
+        )
+        exit_price = raw_exit_price - costs.spread / 2 - costs.slippage_per_unit
         gross_pnl = (exit_price - entry_price) * quantity
         commission = costs.commission_per_unit * quantity * 2
-        funding = costs.funding_per_bar * quantity
+        funding = costs.funding_per_bar * quantity * holding_bars
         total_cost = (
             commission + funding + costs.spread * quantity + costs.slippage_per_unit * quantity * 2
         )
         net_pnl = gross_pnl - total_cost
         trade_id = self._run_id(config_hash, f"{index}:{current['ts'].isoformat()}")[:16]
+        exit_profile = self.config.exit_profile.model_dump(mode="json")
+        exit_metadata: dict[str, float | int | str | bool] = {
+            "exit_profile_fixed_holding_bars": int(exit_profile["fixed_holding_bars"]),
+            "exit_reason": exit_reason,
+        }
+        if exit_profile["stop_atr"] is not None:
+            exit_metadata["exit_profile_stop_atr"] = float(exit_profile["stop_atr"])
+        if exit_profile["target_atr"] is not None:
+            exit_metadata["exit_profile_target_atr"] = float(exit_profile["target_atr"])
         return BacktestTrade(
             trade_id=trade_id,
             symbol=current["symbol"],
             side=Side.LONG,
             entry_time=current["ts"],
-            exit_time=next_bar["ts"],
+            exit_time=exit_bar["ts"],
             entry_price=entry_price,
             exit_price=exit_price,
             quantity=quantity,
             gross_pnl=gross_pnl,
             total_cost=total_cost,
             net_pnl=net_pnl,
-            holding_bars=1,
+            holding_bars=holding_bars,
             scenario=ScenarioType.CONSOLIDATION_BREAKOUT,
             score=score.total,
             slippage=costs.slippage_per_unit,
-            metadata={"level_price": level_price, "index": index, **dict(feature_snapshot)},
+            metadata={
+                "level_price": level_price,
+                "index": index,
+                **dict(feature_snapshot),
+                **exit_metadata,
+            },
         )
+
+    def _resolve_exit(
+        self,
+        *,
+        entry_price: float,
+        next_bar: Bar,
+        future_bars: Sequence[Bar],
+        feature_snapshot: Mapping[str, float | int | str | bool],
+    ) -> tuple[Bar, float, int, str]:
+        profile = self.config.exit_profile
+        bars = list(future_bars) or [next_bar]
+        max_index = min(profile.fixed_holding_bars, len(bars)) - 1
+        fallback_bar = bars[max_index]
+        fallback_holding = max_index + 1
+        fallback_reason = "fixed_holding_close"
+        if fallback_holding < profile.fixed_holding_bars:
+            fallback_reason = "insufficient_future_bars_close"
+        if profile.stop_atr is None or profile.target_atr is None:
+            return fallback_bar, fallback_bar["close"], fallback_holding, fallback_reason
+        atr = feature_snapshot.get("feature_atr")
+        if not isinstance(atr, int | float) or atr <= 0:
+            return fallback_bar, fallback_bar["close"], fallback_holding, "missing_entry_atr_fixed_holding_close"
+        stop_price = entry_price - float(profile.stop_atr) * float(atr)
+        target_price = entry_price + float(profile.target_atr) * float(atr)
+        for offset, bar in enumerate(bars[: profile.fixed_holding_bars], start=1):
+            stop_hit = bar["low"] <= stop_price
+            target_hit = bar["high"] >= target_price
+            if stop_hit:
+                return bar, stop_price, offset, "atr_stop"
+            if target_hit:
+                return bar, target_price, offset, "atr_target"
+        return fallback_bar, fallback_bar["close"], fallback_holding, fallback_reason
 
     def _entry_feature_snapshot(
         self,
@@ -1621,6 +1680,9 @@ def build_report(
     unavailable.update(unavailable_reasons or {})
     parameter_snapshot = config.model_dump(mode="json")
     parameter_snapshot["research_gate_skip_counts"] = dict(sorted((gate_skip_counts or {}).items()))
+    parameter_snapshot["exit_profile_counts"] = dict(
+        sorted(Counter(str(trade.metadata.get("exit_reason", "unknown")) for trade in trades).items())
+    )
     scenario_breakdown: dict[str, int] = {}
     score_distribution: dict[str, int] = {}
     false_breakouts = 0
