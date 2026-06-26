@@ -479,6 +479,8 @@ class BacktestConfig(BaseModel):
     )
     strategy: BreakoutStrategyConfig = Field(default_factory=BreakoutStrategyConfig)
     export_parquet: bool = False
+    forward_path_diagnostics: bool = False
+    forward_path_horizons: tuple[int, ...] = (1, 2, 4, 8, 16)
 
     @model_validator(mode="after")
     def validate_acceptance_costs(self) -> "BacktestConfig":
@@ -489,6 +491,19 @@ class BacktestConfig(BaseModel):
             and self.cost_model.funding_per_bar <= 0
         ):
             msg = "acceptance-quality backtests require explicit non-zero cost assumptions"
+            raise ValueError(msg)
+        return self
+
+    @model_validator(mode="after")
+    def validate_forward_path_horizons(self) -> "BacktestConfig":
+        if not self.forward_path_horizons:
+            msg = "forward_path_horizons must not be empty"
+            raise ValueError(msg)
+        if any(horizon <= 0 for horizon in self.forward_path_horizons):
+            msg = "forward_path_horizons must contain positive integers"
+            raise ValueError(msg)
+        if tuple(sorted(set(self.forward_path_horizons))) != self.forward_path_horizons:
+            msg = "forward_path_horizons must be unique and sorted ascending"
             raise ValueError(msg)
         return self
 
@@ -608,4 +623,6 @@ class BacktestReport(BaseModel):
     slippage_report: dict[str, float] = Field(default_factory=dict)
     windows: list[BacktestWindow] = Field(default_factory=list)
     monte_carlo: MonteCarloResult | None = None
+    forward_path_diagnostics: list[dict[str, object]] = Field(default_factory=list)
+    holding_horizon_diagnostics: list[dict[str, object]] = Field(default_factory=list)
     artifact_paths: list[str] = Field(default_factory=list)

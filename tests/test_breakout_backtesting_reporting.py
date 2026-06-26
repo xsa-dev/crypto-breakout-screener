@@ -602,3 +602,58 @@ def test_confirmation_return_inside_range_cancels_candidate() -> None:
     assert confirmed_report.parameter_snapshot["research_gate_skip_counts"] == {
         "skipped_confirmation_returned_inside_range": 1
     }
+
+
+def test_forward_path_diagnostics_are_opt_in_and_do_not_change_trades(tmp_path) -> None:
+    bars = breakout_dataset()
+    base_report = BacktestEngine(config()).run(bars)
+    diagnostic_config = config().model_copy(update={"forward_path_diagnostics": True})
+    diagnostic_engine = BacktestEngine(diagnostic_config)
+    diagnostic_report = diagnostic_engine.run(bars)
+
+    assert [(trade.entry_time, trade.exit_time, trade.entry_price, trade.exit_price) for trade in diagnostic_report.trades] == [
+        (trade.entry_time, trade.exit_time, trade.entry_price, trade.exit_price) for trade in base_report.trades
+    ]
+    assert diagnostic_report.metrics == base_report.metrics
+    assert len(diagnostic_report.forward_path_diagnostics) == len(base_report.trades) * 5
+    first_horizon = diagnostic_report.forward_path_diagnostics[0]
+    assert first_horizon["trade_id"] == diagnostic_report.trades[0].trade_id
+    assert first_horizon["horizon_bars"] == 1
+    assert first_horizon["available"] is True
+    trade = diagnostic_report.trades[0]
+    assert first_horizon["forward_return"] == pytest.approx((107.0 - trade.entry_price) / trade.entry_price)
+    assert first_horizon["mfe"] == pytest.approx(108.0 - trade.entry_price)
+    assert first_horizon["mae"] == pytest.approx(104.0 - trade.entry_price)
+    assert first_horizon["time_to_mfe_bars"] == 1
+    assert first_horizon["time_to_mae_bars"] == 1
+    assert first_horizon["returned_to_breakout_level"] is True
+    assert first_horizon["crossed_below_entry"] is True
+
+    exported = diagnostic_engine.export_report(diagnostic_report, tmp_path)
+    forward_paths = [path for path in exported.artifact_paths if path.endswith("-forward-path-diagnostics.csv")]
+    holding_paths = [path for path in exported.artifact_paths if path.endswith("-holding-horizon-pnl.csv")]
+    assert len(forward_paths) == 1
+    assert len(holding_paths) == 1
+
+    with open(forward_paths[0], newline="", encoding="utf-8") as file:
+        rows = list(csv.DictReader(file))
+    assert rows[0]["trade_id"] == diagnostic_report.trades[0].trade_id
+    assert rows[0]["horizon_bars"] == "1"
+
+
+def test_forward_path_records_unavailable_horizons() -> None:
+    report = BacktestEngine(
+        config().model_copy(update={"forward_path_diagnostics": True, "forward_path_horizons": (1, 16)})
+    ).run(breakout_dataset())
+
+    unavailable = [
+        row
+        for row in report.forward_path_diagnostics
+        if row["available"] is False and row["horizon_bars"] == 16
+    ]
+    assert unavailable
+    assert {row["unavailable_reason"] for row in unavailable} == {"insufficient_future_bars"}
+    horizon_summary = {row["horizon_bars"]: row for row in report.holding_horizon_diagnostics}
+    assert horizon_summary[16]["unavailable_count"] == len(report.trades)
+    assert horizon_summary[16]["available_count"] == 0
+    assert horizon_summary[16]["average_forward_return"] == "unavailable"

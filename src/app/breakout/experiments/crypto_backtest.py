@@ -279,6 +279,7 @@ def run_crypto_experiment(
     research_gates: BacktestResearchGateConfig | None = None,
     feature_filters: BacktestFeatureFilterConfig | None = None,
     confirmation_filters: BacktestConfirmationFilterConfig | None = None,
+    forward_path_diagnostics: bool = False,
 ) -> CryptoExperimentResult:
     """Run the first BTCUSDT crypto historical experiment and write local artifacts."""
 
@@ -320,6 +321,7 @@ def run_crypto_experiment(
         research_gates=research_gates or BacktestResearchGateConfig(),
         feature_filters=feature_filters or BacktestFeatureFilterConfig(),
         confirmation_filters=confirmation_filters or BacktestConfirmationFilterConfig(),
+        forward_path_diagnostics=forward_path_diagnostics,
         strategy=BreakoutStrategyConfig(
             symbols=[symbol],
             execution_timeframe=TimeFrame.M15,

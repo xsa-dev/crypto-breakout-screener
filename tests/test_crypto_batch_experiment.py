@@ -513,6 +513,8 @@ def _fake_run_factory(
         regime_bucket_path = artifact_dir / f"{run_id}-regime-bucket-summary.csv"
         worst_day_path = artifact_dir / f"{run_id}-worst-day-attribution.csv"
         drawdown_path = artifact_dir / f"{run_id}-drawdown.csv"
+        forward_path = artifact_dir / f"{run_id}-forward-path-diagnostics.csv"
+        holding_path = artifact_dir / f"{run_id}-holding-horizon-pnl.csv"
         parameters_path = artifact_dir / f"{run_id}-parameters.json"
         metrics_path.write_text(
             "metric,value\n"
@@ -550,6 +552,29 @@ def _fake_run_factory(
             "2024-01-02T00:00:00+00:00,-0.42\n",
             encoding="utf-8",
         )
+        artifact_paths = [
+            str(metrics_path),
+            str(entry_features_path),
+            str(feature_bucket_path),
+            str(regime_bucket_path),
+            str(worst_day_path),
+            str(drawdown_path),
+            str(parameters_path),
+            str(manifest_path),
+        ]
+        if kwargs.get("forward_path_diagnostics"):
+            forward_path.write_text(
+                "trade_id,horizon_bars,available,forward_return,mfe,mae,close_above_entry,returned_to_breakout_level,crossed_below_entry\n"
+                f"{run_id}-1,1,True,0.02,3.0,-1.0,True,False,False\n"
+                f"{run_id}-2,1,True,-0.01,1.0,-2.0,False,True,True\n",
+                encoding="utf-8",
+            )
+            holding_path.write_text(
+                "horizon_bars,trade_count,available_count,unavailable_count,synthetic_net_pnl,average_forward_return,average_mfe,average_mae,positive_forward_return_ratio\n"
+                "1,2,2,0,42.0,0.005,2.0,-1.5,0.5\n",
+                encoding="utf-8",
+            )
+            artifact_paths.extend([str(forward_path), str(holding_path)])
         manifest_path.write_text(
             json.dumps(
                 {
@@ -595,16 +620,56 @@ def _fake_run_factory(
             win_rate=0.6,
             artifact_dir=artifact_dir,
             manifest_path=manifest_path,
-            artifact_paths=[
-                str(metrics_path),
-                str(entry_features_path),
-                str(feature_bucket_path),
-                str(regime_bucket_path),
-                str(worst_day_path),
-                str(drawdown_path),
-                str(parameters_path),
-                str(manifest_path),
-            ],
+            artifact_paths=artifact_paths,
         )
 
     return run_single
+
+
+def test_batch_runner_writes_forward_path_diagnostic_summaries(tmp_path) -> None:
+    windows = [
+        BatchWindow(
+            label="forward-pass",
+            start=datetime(2024, 1, 1, tzinfo=UTC),
+            end=datetime(2024, 1, 2, tzinfo=UTC),
+        ),
+        BatchWindow(
+            label="forward-fail",
+            start=datetime(2024, 1, 2, tzinfo=UTC),
+            end=datetime(2024, 1, 3, tzinfo=UTC),
+        ),
+    ]
+
+    result = run_batch_experiment(
+        windows=windows,
+        output_dir=tmp_path / "backtests",
+        market_data_dir=tmp_path / "market-data",
+        gate_profile="conservative-v1-m15-slope-positive-max-trades-8",
+        enable_forward_path_diagnostics=True,
+        download=_fake_download_factory(tmp_path),
+        run_single=_fake_run_factory(tmp_path, net_profit=100.0, profit_factor=1.5),
+    )
+
+    assert result.summary.forward_path_diagnostics_enabled is True
+    paths = result.summary.diagnostic_artifact_paths
+    assert set(paths) == {"forward_path_window_summary", "passed_vs_failed_forward_path_summary"}
+    assert Path(paths["forward_path_window_summary"]).exists()
+    assert Path(paths["passed_vs_failed_forward_path_summary"]).exists()
+    assert all("forward_path_diagnostics" in row.feature_artifact_paths for row in result.summary.windows)
+    assert all("holding_horizon_pnl" in row.feature_artifact_paths for row in result.summary.windows)
+
+    with Path(paths["forward_path_window_summary"]).open(newline="", encoding="utf-8") as file:
+        rows = list(csv.DictReader(file))
+    assert len(rows) == 2
+    assert rows[0]["horizon_bars"] == "1"
+    assert rows[0]["synthetic_net_pnl"] == "42.0"
+
+    with Path(paths["passed_vs_failed_forward_path_summary"]).open(newline="", encoding="utf-8") as file:
+        grouped = list(csv.DictReader(file))
+    assert grouped
+    assert grouped[0]["window_group"] == "passed"
+    assert grouped[0]["positive_forward_return_ratio"] == "0.5"
+
+    summary = json.loads(result.summary_json_path.read_text(encoding="utf-8"))
+    assert summary["forward_path_diagnostics_enabled"] is True
+    assert summary["diagnostic_artifact_paths"] == paths

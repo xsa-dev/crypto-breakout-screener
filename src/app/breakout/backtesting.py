@@ -353,6 +353,12 @@ class BacktestEngine:
             str(worst_day_path),
             str(parameters_path),
         ]
+        if report.forward_path_diagnostics:
+            forward_path = directory / f"{report.run_id}-forward-path-diagnostics.csv"
+            holding_path = directory / f"{report.run_id}-holding-horizon-pnl.csv"
+            _write_dynamic_csv_rows(forward_path, report.forward_path_diagnostics)
+            _write_dynamic_csv_rows(holding_path, report.holding_horizon_diagnostics)
+            paths.extend([str(forward_path), str(holding_path)])
         return report.model_copy(update={"artifact_paths": paths})
 
     def _evaluate_closed_bar(
@@ -1203,6 +1209,148 @@ def _context_feature_snapshot(
     return result
 
 
+def forward_path_diagnostic_rows(
+    bars: Sequence[Bar],
+    trades: Sequence[BacktestTrade],
+    *,
+    horizons: Sequence[int] = (1, 2, 4, 8, 16),
+) -> list[dict[str, object]]:
+    """Return offline forward-path labels for completed trades."""
+
+    rows: list[dict[str, object]] = []
+    for trade in trades:
+        entry_index = _trade_entry_index(trade, bars)
+        for horizon in horizons:
+            rows.append(_forward_path_row(bars, trade, entry_index=entry_index, horizon=int(horizon)))
+    return rows
+
+
+def _trade_entry_index(trade: BacktestTrade, bars: Sequence[Bar]) -> int | None:
+    raw_index = trade.metadata.get("entry_index")
+    if isinstance(raw_index, int):
+        return raw_index
+    for index, bar in enumerate(bars):
+        if bar["ts"] == trade.entry_time:
+            return index
+    return None
+
+
+def _forward_path_row(
+    bars: Sequence[Bar],
+    trade: BacktestTrade,
+    *,
+    entry_index: int | None,
+    horizon: int,
+) -> dict[str, object]:
+    base = {
+        "trade_id": trade.trade_id,
+        "symbol": trade.symbol,
+        "side": trade.side.value,
+        "entry_time": trade.entry_time.isoformat(),
+        "entry_index": entry_index if entry_index is not None else "unavailable",
+        "entry_price": trade.entry_price,
+        "realized_exit_time": trade.exit_time.isoformat(),
+        "realized_exit_price": trade.exit_price,
+        "realized_net_pnl": trade.net_pnl,
+        "quantity": trade.quantity,
+        "level_price": trade.metadata.get("level_price", "unavailable"),
+        "horizon_bars": horizon,
+    }
+    if entry_index is None:
+        return {**base, "available": False, "unavailable_reason": "missing_entry_index"}
+    target_index = entry_index + horizon
+    if target_index >= len(bars):
+        return {**base, "available": False, "unavailable_reason": "insufficient_future_bars"}
+
+    path = bars[entry_index + 1 : target_index + 1]
+    if not path:
+        return {**base, "available": False, "unavailable_reason": "empty_forward_path"}
+    target_close = bars[target_index]["close"]
+    max_high = max(bar["high"] for bar in path)
+    min_low = min(bar["low"] for bar in path)
+    mfe = max_high - trade.entry_price
+    mae = min_low - trade.entry_price
+    time_to_mfe = next(index for index, bar in enumerate(path, start=1) if bar["high"] == max_high)
+    time_to_mae = next(index for index, bar in enumerate(path, start=1) if bar["low"] == min_low)
+    level_price = trade.metadata.get("level_price")
+    return_to_level = (
+        any(bar["low"] <= float(level_price) for bar in path) if isinstance(level_price, int | float) else "unavailable"
+    )
+    gross_pnl = (target_close - trade.entry_price) * trade.quantity
+    synthetic_net_pnl = gross_pnl - trade.total_cost
+    forward_return = (target_close - trade.entry_price) / trade.entry_price
+    return {
+        **base,
+        "available": True,
+        "unavailable_reason": "",
+        "horizon_close_time": bars[target_index]["ts"].isoformat(),
+        "horizon_close": target_close,
+        "forward_return": forward_return,
+        "forward_gross_pnl": gross_pnl,
+        "synthetic_net_pnl": synthetic_net_pnl,
+        "mfe": mfe,
+        "mae": mae,
+        "mfe_to_abs_mae": mfe / abs(mae) if mae < 0 else "unavailable",
+        "time_to_mfe_bars": time_to_mfe,
+        "time_to_mae_bars": time_to_mae,
+        "close_above_entry": target_close > trade.entry_price,
+        "returned_to_breakout_level": return_to_level,
+        "crossed_below_entry": any(bar["low"] < trade.entry_price for bar in path),
+    }
+
+
+def holding_horizon_summary(rows: Sequence[dict[str, object]]) -> list[dict[str, object]]:
+    """Aggregate synthetic holding-horizon labels without changing realized metrics."""
+
+    grouped: dict[int, list[dict[str, object]]] = defaultdict(list)
+    for row in rows:
+        horizon = row.get("horizon_bars")
+        if isinstance(horizon, int):
+            grouped[horizon].append(row)
+    summaries: list[dict[str, object]] = []
+    for horizon in sorted(grouped):
+        horizon_rows = grouped[horizon]
+        available = [row for row in horizon_rows if row.get("available") is True]
+        unavailable = len(horizon_rows) - len(available)
+        summaries.append(
+            {
+                "horizon_bars": horizon,
+                "trade_count": len(horizon_rows),
+                "available_count": len(available),
+                "unavailable_count": unavailable,
+                "synthetic_net_pnl": _sum_numeric(available, "synthetic_net_pnl"),
+                "average_forward_return": _mean_numeric(available, "forward_return"),
+                "average_mfe": _mean_numeric(available, "mfe"),
+                "average_mae": _mean_numeric(available, "mae"),
+                "positive_forward_return_ratio": _true_ratio(available, "close_above_entry"),
+            }
+        )
+    return summaries
+
+
+def _sum_numeric(rows: Sequence[dict[str, object]], key: str) -> float:
+    total = 0.0
+    for row in rows:
+        value = row.get(key)
+        if isinstance(value, int | float):
+            total += float(value)
+    return total
+
+
+def _mean_numeric(rows: Sequence[dict[str, object]], key: str) -> float | str:
+    values: list[float] = []
+    for row in rows:
+        value = row.get(key)
+        if isinstance(value, int | float):
+            values.append(float(value))
+    return sum(values) / len(values) if values else "unavailable"
+
+
+def _true_ratio(rows: Sequence[dict[str, object]], key: str) -> float | str:
+    values = [row.get(key) for row in rows if isinstance(row.get(key), bool)]
+    return sum(1 for value in values if value) / len(values) if values else "unavailable"
+
+
 def build_report(
     *,
     run_id: str,
@@ -1238,6 +1386,15 @@ def build_report(
             false_breakouts += 1
 
     slippages = [trade.slippage for trade in trades]
+    forward_path_diagnostics: list[dict[str, object]] = []
+    holding_horizon_diagnostics: list[dict[str, object]] = []
+    if config.forward_path_diagnostics:
+        forward_path_diagnostics = forward_path_diagnostic_rows(
+            bars,
+            trades,
+            horizons=config.forward_path_horizons,
+        )
+        holding_horizon_diagnostics = holding_horizon_summary(forward_path_diagnostics)
     return BacktestReport(
         run_id=run_id,
         config_hash=config_hash,
@@ -1259,6 +1416,8 @@ def build_report(
         },
         windows=list(windows),
         monte_carlo=monte_carlo,
+        forward_path_diagnostics=forward_path_diagnostics,
+        holding_horizon_diagnostics=holding_horizon_diagnostics,
     )
 
 
