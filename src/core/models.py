@@ -459,6 +459,60 @@ class MonteCarloResult(BaseModel):
     best_net_pnl: float
 
 
+class ProductionOosThresholds(BaseModel):
+    """Explicit local production OOS/business-validity thresholds."""
+
+    min_oos_performance: float | None = None
+    max_drawdown_floor: float | None = None
+    min_win_rate: float | None = Field(default=None, ge=0, le=1)
+    min_profit_factor: float | None = Field(default=None, ge=0)
+    min_trade_count: int | None = Field(default=None, ge=1)
+
+    @property
+    def configured(self) -> bool:
+        return any(
+            value is not None
+            for value in (
+                self.min_oos_performance,
+                self.max_drawdown_floor,
+                self.min_win_rate,
+                self.min_profit_factor,
+                self.min_trade_count,
+            )
+        )
+
+
+class ProductionOosMetricCheck(BaseModel):
+    """Auditable comparison of one backtest metric against one threshold."""
+
+    metric: Literal[
+        "oos_performance",
+        "max_drawdown",
+        "win_rate",
+        "profit_factor",
+        "trade_count",
+    ]
+    actual: float
+    threshold: float
+    operator: Literal["gte"] = "gte"
+    passed: bool
+
+
+class ProductionOosGateDecision(BaseModel):
+    """Fail-closed local decision for production OOS/business-validity review."""
+
+    approved: bool
+    reason: Literal[
+        "approved",
+        "missing_oos_thresholds",
+        "oos_metric_missing",
+        "oos_metric_unavailable",
+        "oos_threshold_failed",
+    ]
+    checked_metrics: list[ProductionOosMetricCheck] = Field(default_factory=list)
+    blockers: list[str] = Field(default_factory=list)
+
+
 class BacktestReport(BaseModel):
     """Reproducible backtest report artifact manifest and payload."""
 

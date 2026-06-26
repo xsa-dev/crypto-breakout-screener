@@ -5,8 +5,14 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from pydantic import ValidationError
 
-from src.app.breakout.backtesting import BacktestEngine, stable_hash
-from src.core.models import BacktestConfig, BacktestCostModel, BreakoutStrategyConfig, ScoreConfig
+from src.app.breakout.backtesting import BacktestEngine, evaluate_production_oos_gate, stable_hash
+from src.core.models import (
+    BacktestConfig,
+    BacktestCostModel,
+    BreakoutStrategyConfig,
+    ProductionOosThresholds,
+    ScoreConfig,
+)
 from src.core.schemas import Bar
 
 
@@ -145,3 +151,75 @@ def test_report_contains_required_metrics_diagnostics_windows_and_exports(tmp_pa
 
     second_export = BacktestEngine(config()).export_report(report, tmp_path)
     assert second_export.artifact_paths == exported.artifact_paths
+
+
+def test_production_oos_gate_blocks_missing_thresholds() -> None:
+    report = BacktestEngine(config()).run(breakout_dataset())
+
+    decision = evaluate_production_oos_gate(report, ProductionOosThresholds())
+
+    assert decision.approved is False
+    assert decision.reason == "missing_oos_thresholds"
+    assert decision.blockers == ["missing_oos_thresholds"]
+
+
+def test_production_oos_gate_approves_when_configured_thresholds_pass() -> None:
+    report = BacktestEngine(config()).run(breakout_dataset())
+
+    decision = evaluate_production_oos_gate(
+        report,
+        ProductionOosThresholds(
+            min_oos_performance=-10.0,
+            min_win_rate=0.0,
+            min_trade_count=1,
+            max_drawdown_floor=-0.01,
+        ),
+    )
+
+    assert decision.approved is True
+    assert decision.reason == "approved"
+    assert {check.metric for check in decision.checked_metrics} == {
+        "oos_performance",
+        "win_rate",
+        "trade_count",
+        "max_drawdown",
+    }
+    assert decision.blockers == []
+
+
+def test_production_oos_gate_blocks_failed_thresholds() -> None:
+    report = BacktestEngine(config()).run(breakout_dataset())
+
+    decision = evaluate_production_oos_gate(
+        report,
+        ProductionOosThresholds(min_win_rate=1.0, max_drawdown_floor=0.0),
+    )
+
+    assert decision.approved is False
+    assert decision.reason == "oos_threshold_failed"
+    assert "win_rate_below_threshold" in decision.blockers
+    assert "max_drawdown_below_threshold" in decision.blockers
+
+
+def test_production_oos_gate_blocks_missing_or_unavailable_metrics() -> None:
+    report = BacktestEngine(config()).run(breakout_dataset())
+    missing_metric_report = report.model_copy(update={"metrics": {"win_rate": 0.5}})
+    unavailable_metric_report = report.model_copy(
+        update={"unavailable_reasons": {"profit_factor": "no losing trades in sample"}}
+    )
+
+    missing_decision = evaluate_production_oos_gate(
+        missing_metric_report,
+        ProductionOosThresholds(min_oos_performance=0.0),
+    )
+    unavailable_decision = evaluate_production_oos_gate(
+        unavailable_metric_report,
+        ProductionOosThresholds(min_profit_factor=1.1),
+    )
+
+    assert missing_decision.approved is False
+    assert missing_decision.reason == "oos_metric_missing"
+    assert missing_decision.blockers == ["oos_performance_missing"]
+    assert unavailable_decision.approved is False
+    assert unavailable_decision.reason == "oos_metric_unavailable"
+    assert unavailable_decision.blockers == ["profit_factor_unavailable"]

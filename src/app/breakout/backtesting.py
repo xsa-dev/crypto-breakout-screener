@@ -8,7 +8,7 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, cast
 
 from pydantic import BaseModel
 
@@ -26,6 +26,9 @@ from src.core.models import (
     BreakoutScore,
     MarketSnapshot,
     MonteCarloResult,
+    ProductionOosGateDecision,
+    ProductionOosMetricCheck,
+    ProductionOosThresholds,
     RiskLimits,
     RiskState,
 )
@@ -408,6 +411,85 @@ def stable_hash(value: Any) -> str:
         _normalize(value), sort_keys=True, separators=(",", ":"), ensure_ascii=False
     )
     return f"sha256:{hashlib.sha256(canonical.encode('utf-8')).hexdigest()}"
+
+
+OosGateReason = Literal[
+    "approved",
+    "missing_oos_thresholds",
+    "oos_metric_missing",
+    "oos_metric_unavailable",
+    "oos_threshold_failed",
+]
+OosMetricName = Literal[
+    "oos_performance",
+    "max_drawdown",
+    "win_rate",
+    "profit_factor",
+    "trade_count",
+]
+
+
+def evaluate_production_oos_gate(
+    report: BacktestReport,
+    thresholds: ProductionOosThresholds,
+) -> ProductionOosGateDecision:
+    """Evaluate a completed report against explicit local OOS approval thresholds."""
+
+    if not thresholds.configured:
+        return ProductionOosGateDecision(
+            approved=False,
+            reason="missing_oos_thresholds",
+            blockers=["missing_oos_thresholds"],
+        )
+
+    blockers: list[str] = []
+    checked: list[ProductionOosMetricCheck] = []
+    threshold_map: list[tuple[OosMetricName, float | int | None]] = [
+        ("oos_performance", thresholds.min_oos_performance),
+        ("max_drawdown", thresholds.max_drawdown_floor),
+        ("win_rate", thresholds.min_win_rate),
+        ("profit_factor", thresholds.min_profit_factor),
+        ("trade_count", thresholds.min_trade_count),
+    ]
+
+    for metric, threshold in threshold_map:
+        if threshold is None:
+            continue
+        if metric in report.unavailable_reasons:
+            blockers.append(f"{metric}_unavailable")
+            continue
+        value = report.metrics.get(metric)
+        if not isinstance(value, int | float) or value is None:
+            blockers.append(f"{metric}_missing")
+            continue
+        passed = float(value) >= float(threshold)
+        checked.append(
+            ProductionOosMetricCheck(
+                metric=metric,
+                actual=float(value),
+                threshold=float(threshold),
+                passed=passed,
+            )
+        )
+        if not passed:
+            blockers.append(f"{metric}_below_threshold")
+
+    if blockers:
+        return ProductionOosGateDecision(
+            approved=False,
+            reason=_oos_block_reason(blockers),
+            checked_metrics=checked,
+            blockers=blockers,
+        )
+    return ProductionOosGateDecision(approved=True, reason="approved", checked_metrics=checked)
+
+
+def _oos_block_reason(blockers: Sequence[str]) -> OosGateReason:
+    if any(blocker.endswith("_unavailable") for blocker in blockers):
+        return "oos_metric_unavailable"
+    if any(blocker.endswith("_missing") for blocker in blockers):
+        return "oos_metric_missing"
+    return cast(OosGateReason, "oos_threshold_failed")
 
 
 def _metrics(
