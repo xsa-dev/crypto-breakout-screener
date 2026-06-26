@@ -36,6 +36,7 @@ BATCH_SUMMARY_COLUMNS = [
     "end",
     "gate_profile",
     "feature_filter_profile",
+    "risk_control_profile",
     "status",
     "blockers",
     "run_id",
@@ -55,6 +56,8 @@ BATCH_SUMMARY_COLUMNS = [
     "gate_settings_json",
     "feature_filter_settings_json",
     "feature_filter_skip_counts_json",
+    "risk_control_settings_json",
+    "risk_control_skip_counts_json",
     "feature_artifact_paths_json",
     "downloaded_csv_paths_json",
     "manifest_path",
@@ -98,6 +101,7 @@ class BatchWindowSummary(BaseModel):
     end: datetime
     gate_profile: str = "baseline"
     feature_filter_profile: str = "none"
+    risk_control_profile: str = "none"
     status: Literal["passed", "failed", "blocked"]
     blockers: list[str] = Field(default_factory=list)
     run_id: str | None = None
@@ -117,6 +121,8 @@ class BatchWindowSummary(BaseModel):
     gate_settings: dict[str, Any] = Field(default_factory=dict)
     feature_filter_settings: dict[str, Any] = Field(default_factory=dict)
     feature_filter_skip_counts: dict[str, int] = Field(default_factory=dict)
+    risk_control_settings: dict[str, Any] = Field(default_factory=dict)
+    risk_control_skip_counts: dict[str, int] = Field(default_factory=dict)
     feature_artifact_paths: dict[str, str] = Field(default_factory=dict)
     downloaded_csv_paths: dict[str, str] = Field(default_factory=dict)
     manifest_path: str | None = None
@@ -153,8 +159,10 @@ class BatchExperimentSummary(BaseModel):
     execution_timeframe: Literal["M15"] = "M15"
     gate_profile: str = "baseline"
     feature_filter_profile: str = "none"
+    risk_control_profile: str = "none"
     gate_settings: dict[str, Any] = Field(default_factory=dict)
     feature_filter_settings: dict[str, Any] = Field(default_factory=dict)
+    risk_control_settings: dict[str, Any] = Field(default_factory=dict)
     context_timeframes: list[str] = Field(default_factory=lambda: ["H1", "H4", "D1"])
     windows: list[BatchWindowSummary]
     aggregate: BatchAggregate
@@ -208,14 +216,29 @@ def research_gate_profile(name: str) -> BacktestResearchGateConfig:
         "conservative-v1-h1-long",
         "conservative-v1-m15-slope-positive-h1-long",
         "conservative-v1-m15-slope-positive-body-cap",
+        "conservative-v1-m15-slope-positive-daily-stop-3000",
+        "conservative-v1-m15-slope-positive-daily-stop-2000",
+        "conservative-v1-m15-slope-positive-max-trades-8",
+        "conservative-v1-m15-slope-positive-loss-cooldown-12",
     }:
+        daily_stop_loss = 5_000.0
+        max_trades_per_day = 12
+        cooldown_bars_after_loss = 6
+        if name == "conservative-v1-m15-slope-positive-daily-stop-3000":
+            daily_stop_loss = 3_000.0
+        elif name == "conservative-v1-m15-slope-positive-daily-stop-2000":
+            daily_stop_loss = 2_000.0
+        elif name == "conservative-v1-m15-slope-positive-max-trades-8":
+            max_trades_per_day = 8
+        elif name == "conservative-v1-m15-slope-positive-loss-cooldown-12":
+            cooldown_bars_after_loss = 12
         return BacktestResearchGateConfig(
             min_entry_score=40,
             cooldown_bars_after_trade=3,
-            cooldown_bars_after_loss=6,
+            cooldown_bars_after_loss=cooldown_bars_after_loss,
             block_immediate_reentry=True,
-            max_trades_per_day=12,
-            daily_stop_loss=5_000.0,
+            max_trades_per_day=max_trades_per_day,
+            daily_stop_loss=daily_stop_loss,
         )
     msg = f"unsupported gate profile: {name}"
     raise ValueError(msg)
@@ -226,7 +249,13 @@ def feature_filter_profile(name: str) -> BacktestFeatureFilterConfig:
 
     if name in {"baseline", "conservative-v1", "none"}:
         return BacktestFeatureFilterConfig()
-    if name == "conservative-v1-m15-slope-positive":
+    if name in {
+        "conservative-v1-m15-slope-positive",
+        "conservative-v1-m15-slope-positive-daily-stop-3000",
+        "conservative-v1-m15-slope-positive-daily-stop-2000",
+        "conservative-v1-m15-slope-positive-max-trades-8",
+        "conservative-v1-m15-slope-positive-loss-cooldown-12",
+    }:
         return BacktestFeatureFilterConfig(require_m15_ema_slope_positive=True)
     if name == "conservative-v1-h1-long":
         return BacktestFeatureFilterConfig(require_h1_trend_long=True)
@@ -252,6 +281,23 @@ def _feature_filter_profile_name(gate_profile: str, explicit: str | None = None)
         "conservative-v1-h1-long",
         "conservative-v1-m15-slope-positive-h1-long",
         "conservative-v1-m15-slope-positive-body-cap",
+        "conservative-v1-m15-slope-positive-daily-stop-3000",
+        "conservative-v1-m15-slope-positive-daily-stop-2000",
+        "conservative-v1-m15-slope-positive-max-trades-8",
+        "conservative-v1-m15-slope-positive-loss-cooldown-12",
+    }:
+        if gate_profile.startswith("conservative-v1-m15-slope-positive-"):
+            return "conservative-v1-m15-slope-positive"
+        return gate_profile
+    return "none"
+
+
+def _risk_control_profile_name(gate_profile: str) -> str:
+    if gate_profile in {
+        "conservative-v1-m15-slope-positive-daily-stop-3000",
+        "conservative-v1-m15-slope-positive-daily-stop-2000",
+        "conservative-v1-m15-slope-positive-max-trades-8",
+        "conservative-v1-m15-slope-positive-loss-cooldown-12",
     }:
         return gate_profile
     return "none"
@@ -280,10 +326,12 @@ def run_batch_experiment(
         gate_profile,
         feature_filter_profile_name,
     )
+    active_risk_control_profile = _risk_control_profile_name(gate_profile)
     active_gates = research_gates or research_gate_profile(gate_profile)
     active_feature_filters = feature_filters or feature_filter_profile(active_feature_filter_profile)
     gate_settings = active_gates.model_dump(mode="json")
     feature_filter_settings = active_feature_filters.model_dump(mode="json")
+    risk_control_settings = gate_settings if active_risk_control_profile != "none" else {}
     batch_id = _batch_id(
         windows=windows,
         thresholds=active_thresholds,
@@ -291,6 +339,8 @@ def run_batch_experiment(
         gate_settings=gate_settings,
         feature_filter_profile=active_feature_filter_profile,
         feature_filter_settings=feature_filter_settings,
+        risk_control_profile=active_risk_control_profile,
+        risk_control_settings=risk_control_settings,
     )
     artifact_dir = Path(output_dir) / "crypto" / symbol / batch_id
     artifact_dir.mkdir(parents=True, exist_ok=True)
@@ -306,6 +356,7 @@ def run_batch_experiment(
                 thresholds=active_thresholds,
                 gate_profile=gate_profile,
                 feature_filter_profile=active_feature_filter_profile,
+                risk_control_profile=active_risk_control_profile,
                 research_gates=active_gates,
                 feature_filters=active_feature_filters,
                 download=download,
@@ -318,8 +369,10 @@ def run_batch_experiment(
                 end=to_utc(window.end),
                 gate_profile=gate_profile,
                 feature_filter_profile=active_feature_filter_profile,
+                risk_control_profile=active_risk_control_profile,
                 gate_settings=gate_settings,
                 feature_filter_settings=feature_filter_settings,
+                risk_control_settings=risk_control_settings,
                 status="failed",
                 blockers=[f"window_exception:{type(exc).__name__}:{exc}"],
             )
@@ -335,8 +388,10 @@ def run_batch_experiment(
         batch_id=batch_id,
         gate_profile=gate_profile,
         feature_filter_profile=active_feature_filter_profile,
+        risk_control_profile=active_risk_control_profile,
         gate_settings=gate_settings,
         feature_filter_settings=feature_filter_settings,
+        risk_control_settings=risk_control_settings,
         windows=rows,
         aggregate=aggregate,
         summary_csv_path=str(summary_csv_path),
@@ -415,6 +470,7 @@ def _run_batch_window(
     thresholds: ResearchThresholds,
     gate_profile: str,
     feature_filter_profile: str,
+    risk_control_profile: str,
     research_gates: BacktestResearchGateConfig,
     feature_filters: BacktestFeatureFilterConfig,
     download: DownloadCallable,
@@ -453,9 +509,12 @@ def _run_batch_window(
         end=end,
         gate_profile=gate_profile,
         feature_filter_profile=feature_filter_profile,
+        risk_control_profile=risk_control_profile,
         gate_settings=research_gates.model_dump(mode="json"),
         feature_filter_settings=feature_filters.model_dump(mode="json"),
         feature_filter_skip_counts=_feature_filter_skip_counts(result.artifact_dir / f"{result.run_id}-parameters.json"),
+        risk_control_settings=research_gates.model_dump(mode="json") if risk_control_profile != "none" else {},
+        risk_control_skip_counts=_risk_control_skip_counts(result.artifact_dir / f"{result.run_id}-parameters.json"),
         status="passed",
         run_id=result.run_id,
         dataset_hash=result.dataset_hash,
@@ -564,6 +623,23 @@ def _feature_filter_skip_counts(path: Path) -> dict[str, int]:
     }
 
 
+def _risk_control_skip_counts(path: Path) -> dict[str, int]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    raw_counts = payload.get("research_gate_skip_counts", {})
+    if not isinstance(raw_counts, dict):
+        return {}
+    risk_reasons = {
+        "skipped_daily_stop_loss",
+        "skipped_max_trades_per_day",
+        "skipped_cooldown",
+    }
+    return {
+        str(key): int(value)
+        for key, value in raw_counts.items()
+        if str(key) in risk_reasons and isinstance(value, int | float)
+    }
+
+
 def _write_summary_csv(path: Path, rows: list[BatchWindowSummary]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temp_path = path.with_name(f".{path.name}.tmp")
@@ -600,6 +676,7 @@ def _csv_row(row: BatchWindowSummary) -> dict[str, str | int | float | None]:
         "end": _format_datetime(row.end),
         "gate_profile": row.gate_profile,
         "feature_filter_profile": row.feature_filter_profile,
+        "risk_control_profile": row.risk_control_profile,
         "status": row.status,
         "blockers": ";".join(row.blockers),
         "run_id": row.run_id,
@@ -619,6 +696,8 @@ def _csv_row(row: BatchWindowSummary) -> dict[str, str | int | float | None]:
         "gate_settings_json": json.dumps(row.gate_settings, sort_keys=True),
         "feature_filter_settings_json": json.dumps(row.feature_filter_settings, sort_keys=True),
         "feature_filter_skip_counts_json": json.dumps(row.feature_filter_skip_counts, sort_keys=True),
+        "risk_control_settings_json": json.dumps(row.risk_control_settings, sort_keys=True),
+        "risk_control_skip_counts_json": json.dumps(row.risk_control_skip_counts, sort_keys=True),
         "feature_artifact_paths_json": json.dumps(row.feature_artifact_paths, sort_keys=True),
         "downloaded_csv_paths_json": json.dumps(row.downloaded_csv_paths, sort_keys=True),
         "manifest_path": row.manifest_path,
@@ -668,6 +747,8 @@ def _batch_id(
     gate_settings: dict[str, Any],
     feature_filter_profile: str = "none",
     feature_filter_settings: dict[str, Any] | None = None,
+    risk_control_profile: str = "none",
+    risk_control_settings: dict[str, Any] | None = None,
 ) -> str:
     payload = {
         "windows": [
@@ -679,6 +760,8 @@ def _batch_id(
         "gate_settings": gate_settings,
         "feature_filter_profile": feature_filter_profile,
         "feature_filter_settings": feature_filter_settings or {},
+        "risk_control_profile": risk_control_profile,
+        "risk_control_settings": risk_control_settings or {},
         "symbol": "BTCUSDT",
         "source": "bybit_public",
         "execution_timeframe": "M15",
@@ -740,6 +823,10 @@ def _build_parser() -> argparse.ArgumentParser:
             "conservative-v1-h1-long",
             "conservative-v1-m15-slope-positive-h1-long",
             "conservative-v1-m15-slope-positive-body-cap",
+            "conservative-v1-m15-slope-positive-daily-stop-3000",
+            "conservative-v1-m15-slope-positive-daily-stop-2000",
+            "conservative-v1-m15-slope-positive-max-trades-8",
+            "conservative-v1-m15-slope-positive-loss-cooldown-12",
         ],
         default="baseline",
     )

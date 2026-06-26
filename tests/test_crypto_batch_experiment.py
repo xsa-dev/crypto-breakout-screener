@@ -147,6 +147,53 @@ def test_batch_runner_records_feature_filter_profile(tmp_path) -> None:
     assert json.loads(rows[0]["feature_filter_settings_json"])["require_m15_ema_slope_positive"] is True
     assert json.loads(rows[0]["feature_filter_skip_counts_json"]) == {"skipped_feature_m15_ema_slope_not_positive": 3}
 
+
+
+def test_batch_runner_records_drawdown_risk_control_profile(tmp_path) -> None:
+    windows = [
+        BatchWindow(
+            label="risk",
+            start=datetime(2024, 1, 1, tzinfo=UTC),
+            end=datetime(2024, 1, 2, tzinfo=UTC),
+        )
+    ]
+    seen_gates: list[dict[str, Any]] = []
+    seen_filters: list[dict[str, Any]] = []
+
+    def run_single(**kwargs: Any) -> CryptoExperimentResult:
+        seen_gates.append(kwargs["research_gates"].model_dump(mode="json"))
+        seen_filters.append(kwargs["feature_filters"].model_dump(mode="json"))
+        return _fake_run_factory(tmp_path)(**kwargs)
+
+    result = run_batch_experiment(
+        windows=windows,
+        output_dir=tmp_path / "backtests",
+        market_data_dir=tmp_path / "market-data",
+        gate_profile="conservative-v1-m15-slope-positive-daily-stop-3000",
+        download=_fake_download_factory(tmp_path),
+        run_single=run_single,
+    )
+
+    row = result.summary.windows[0]
+    assert result.summary.feature_filter_profile == "conservative-v1-m15-slope-positive"
+    assert result.summary.risk_control_profile == "conservative-v1-m15-slope-positive-daily-stop-3000"
+    assert row.risk_control_profile == "conservative-v1-m15-slope-positive-daily-stop-3000"
+    assert row.risk_control_settings["daily_stop_loss"] == 3000.0
+    assert row.risk_control_skip_counts == {
+        "skipped_cooldown": 5,
+        "skipped_daily_stop_loss": 2,
+        "skipped_max_trades_per_day": 4,
+    }
+    assert seen_gates[0]["daily_stop_loss"] == 3000.0
+    assert seen_filters[0]["require_m15_ema_slope_positive"] is True
+
+    with result.summary_csv_path.open(newline="", encoding="utf-8") as file:
+        rows = list(csv.DictReader(file))
+    assert rows[0]["risk_control_profile"] == "conservative-v1-m15-slope-positive-daily-stop-3000"
+    assert json.loads(rows[0]["risk_control_settings_json"])["daily_stop_loss"] == 3000.0
+    assert json.loads(rows[0]["risk_control_skip_counts_json"]) == row.risk_control_skip_counts
+
+
 def test_batch_verdict_blocks_failed_thresholds(tmp_path) -> None:
     windows = [
         BatchWindow(
@@ -315,6 +362,9 @@ def _fake_run_factory(
                     "feature_filters": kwargs["feature_filters"].model_dump(mode="json"),
                     "research_gate_skip_counts": {
                         "skipped_feature_m15_ema_slope_not_positive": 3,
+                        "skipped_cooldown": 5,
+                        "skipped_daily_stop_loss": 2,
+                        "skipped_max_trades_per_day": 4,
                     },
                 },
                 sort_keys=True,
