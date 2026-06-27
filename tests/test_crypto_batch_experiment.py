@@ -538,6 +538,48 @@ def test_batch_runner_records_exit_profile(tmp_path) -> None:
     assert occupancy_row.gate_settings["block_overlapping_positions"] is True
     assert seen_gate_profiles[-1]["block_overlapping_positions"] is True
 
+    occupancy_large_target_profile = (
+        "conservative-v1-m15-slope-positive-max-trades-8-occupancy-target-4p0-hold-32"
+    )
+    occupancy_large_target_result = run_batch_experiment(
+        windows=windows,
+        output_dir=tmp_path / "occupancy-large-target-backtests",
+        market_data_dir=tmp_path / "occupancy-large-target-market-data",
+        gate_profile=occupancy_large_target_profile,
+        download=_fake_download_factory(tmp_path),
+        run_single=run_single,
+    )
+    occupancy_large_target_row = occupancy_large_target_result.summary.windows[0]
+    assert occupancy_large_target_row.exit_profile == occupancy_large_target_profile
+    assert occupancy_large_target_row.exit_profile_settings == {
+        "fixed_holding_bars": 32,
+        "target_atr": 4.0,
+    }
+    assert occupancy_large_target_row.gate_settings["block_overlapping_positions"] is True
+    assert seen_gate_profiles[-1]["block_overlapping_positions"] is True
+    assert seen_exit_profiles[-1] == occupancy_large_target_row.exit_profile_settings
+
+    occupancy_close_target_profile = (
+        "conservative-v1-m15-slope-positive-max-trades-8-occupancy-close-target-2p0-hold-32"
+    )
+    occupancy_close_target_result = run_batch_experiment(
+        windows=windows,
+        output_dir=tmp_path / "occupancy-close-target-backtests",
+        market_data_dir=tmp_path / "occupancy-close-target-market-data",
+        gate_profile=occupancy_close_target_profile,
+        download=_fake_download_factory(tmp_path),
+        run_single=run_single,
+    )
+    occupancy_close_target_row = occupancy_close_target_result.summary.windows[0]
+    assert occupancy_close_target_row.exit_profile == occupancy_close_target_profile
+    assert occupancy_close_target_row.exit_profile_settings == {
+        "fixed_holding_bars": 32,
+        "close_target_atr": 2.0,
+    }
+    assert occupancy_close_target_row.gate_settings["block_overlapping_positions"] is True
+    assert seen_gate_profiles[-1]["block_overlapping_positions"] is True
+    assert seen_exit_profiles[-1] == occupancy_close_target_row.exit_profile_settings
+
     close_target_close_stop_profile = (
         "conservative-v1-m15-slope-positive-max-trades-8-"
         "close-target-2p0-close-stop-1p0-hold-32"
