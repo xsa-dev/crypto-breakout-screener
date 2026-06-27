@@ -294,6 +294,9 @@ EXIT_PROFILE_NAMES = {
     "conservative-v1-m15-slope-positive-max-trades-8-target-3p0-trail-1p5-giveback-1p0-hold-32",
     "conservative-v1-m15-slope-positive-max-trades-8-target-4p0-trail-2p0-giveback-1p0-hold-32",
     "conservative-v1-m15-slope-positive-max-trades-8-close-target-2p0-trail-1p5-giveback-1p0-hold-32",
+    "conservative-v1-m15-slope-positive-max-trades-8-target-3p0-fav-timeout-1p0-after-4-hold-32",
+    "conservative-v1-m15-slope-positive-max-trades-8-target-4p0-fav-timeout-1p0-after-4-hold-32",
+    "conservative-v1-m15-slope-positive-max-trades-8-close-target-2p0-fav-timeout-1p0-after-4-hold-32",
     "conservative-v1-m15-slope-positive-max-trades-8-trail-1p0-giveback-0p5-hold-8",
     "conservative-v1-m15-slope-positive-max-trades-8-trail-1p0-giveback-1p0-hold-16",
 }
@@ -705,6 +708,36 @@ def exit_profile_config(name: str) -> BacktestExitProfileConfig:
             fixed_holding_bars=16,
             close_stop_atr=0.5,
             close_target_atr=2.0,
+        )
+    if name == (
+        "conservative-v1-m15-slope-positive-max-trades-8-"
+        "target-3p0-fav-timeout-1p0-after-4-hold-32"
+    ):
+        return BacktestExitProfileConfig(
+            fixed_holding_bars=32,
+            target_atr=3.0,
+            favorable_timeout_atr=1.0,
+            favorable_timeout_bars=4,
+        )
+    if name == (
+        "conservative-v1-m15-slope-positive-max-trades-8-"
+        "target-4p0-fav-timeout-1p0-after-4-hold-32"
+    ):
+        return BacktestExitProfileConfig(
+            fixed_holding_bars=32,
+            target_atr=4.0,
+            favorable_timeout_atr=1.0,
+            favorable_timeout_bars=4,
+        )
+    if name == (
+        "conservative-v1-m15-slope-positive-max-trades-8-"
+        "close-target-2p0-fav-timeout-1p0-after-4-hold-32"
+    ):
+        return BacktestExitProfileConfig(
+            fixed_holding_bars=32,
+            close_target_atr=2.0,
+            favorable_timeout_atr=1.0,
+            favorable_timeout_bars=4,
         )
     if name == "conservative-v1-m15-slope-positive-max-trades-8-trail-1p0-giveback-0p5-hold-8":
         return BacktestExitProfileConfig(

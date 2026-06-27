@@ -653,6 +653,41 @@ def test_batch_runner_records_exit_profile(tmp_path) -> None:
         "close_target_atr": 2.0,
     }
 
+    favorable_timeout_profile = (
+        "conservative-v1-m15-slope-positive-max-trades-8-"
+        "target-4p0-fav-timeout-1p0-after-4-hold-32"
+    )
+    favorable_timeout_result = run_batch_experiment(
+        windows=windows,
+        output_dir=tmp_path / "favorable-timeout-backtests",
+        market_data_dir=tmp_path / "favorable-timeout-market-data",
+        gate_profile=favorable_timeout_profile,
+        download=_fake_download_factory(tmp_path),
+        run_single=run_single,
+    )
+    favorable_timeout_row = favorable_timeout_result.summary.windows[0]
+    assert favorable_timeout_row.exit_profile == favorable_timeout_profile
+    assert favorable_timeout_row.exit_profile_settings == {
+        "fixed_holding_bars": 32,
+        "target_atr": 4.0,
+        "favorable_timeout_atr": 1.0,
+        "favorable_timeout_bars": 4,
+    }
+    assert seen_exit_profiles[-1] == favorable_timeout_row.exit_profile_settings
+
+    close_target_favorable_timeout_profile = (
+        "conservative-v1-m15-slope-positive-max-trades-8-"
+        "close-target-2p0-fav-timeout-1p0-after-4-hold-32"
+    )
+    assert exit_profile_config(close_target_favorable_timeout_profile).model_dump(
+        mode="json", exclude_none=True
+    ) == {
+        "fixed_holding_bars": 32,
+        "close_target_atr": 2.0,
+        "favorable_timeout_atr": 1.0,
+        "favorable_timeout_bars": 4,
+    }
+
 
 
 def test_batch_runner_passes_and_records_cost_model_settings(tmp_path) -> None:

@@ -607,6 +607,14 @@ class BacktestEngine:
                 )
         if exit_profile["close_target_atr"] is not None:
             exit_metadata["exit_profile_close_target_atr"] = float(exit_profile["close_target_atr"])
+        if exit_profile["favorable_timeout_atr"] is not None:
+            exit_metadata["exit_profile_favorable_timeout_atr"] = float(
+                exit_profile["favorable_timeout_atr"]
+            )
+        if exit_profile["favorable_timeout_bars"] is not None:
+            exit_metadata["exit_profile_favorable_timeout_bars"] = int(
+                exit_profile["favorable_timeout_bars"]
+            )
         if exit_profile.get("partial_targets"):
             exit_metadata["exit_profile_partial_targets"] = json.dumps(
                 exit_profile["partial_targets"],
@@ -831,6 +839,7 @@ class BacktestEngine:
                 profile.trailing_giveback_atr,
                 profile.close_stop_atr,
                 profile.close_target_atr,
+                profile.favorable_timeout_atr,
             )
         )
         if not requires_atr:
@@ -861,10 +870,17 @@ class BacktestEngine:
             if profile.close_target_atr is not None
             else None
         )
+        favorable_timeout_price = (
+            entry_price + float(profile.favorable_timeout_atr) * atr_value
+            if profile.favorable_timeout_atr is not None
+            else None
+        )
         breakeven_active = False
         trailing_active = False
         trailing_high: float | None = None
+        max_favorable_high = entry_price
         for offset, bar in enumerate(bars[: profile.fixed_holding_bars], start=1):
+            max_favorable_high = max(max_favorable_high, bar["high"])
             if stop_price is not None and bar["low"] <= stop_price:
                 return bar, stop_price, offset, "atr_stop"
             if (
@@ -887,6 +903,13 @@ class BacktestEngine:
                 return bar, target_price, offset, "atr_target"
             if close_target_price is not None and bar["close"] >= close_target_price:
                 return bar, bar["close"], offset, "close_atr_target"
+            if (
+                favorable_timeout_price is not None
+                and profile.favorable_timeout_bars is not None
+                and offset >= profile.favorable_timeout_bars
+                and max_favorable_high < favorable_timeout_price
+            ):
+                return bar, bar["close"], offset, "favorable_timeout_exit"
             if breakeven_activation is not None and bar["high"] >= breakeven_activation:
                 breakeven_active = True
             if trailing_activation is not None and bar["high"] >= trailing_activation:

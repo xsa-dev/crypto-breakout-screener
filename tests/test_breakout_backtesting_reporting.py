@@ -129,6 +129,38 @@ def test_notional_commission_and_funding_are_included_in_trade_costs() -> None:
     assert notional_trade.net_pnl == pytest.approx(base_trade.net_pnl - expected_extra_cost)
 
 
+def test_favorable_timeout_exit_closes_stalled_trade_and_records_metadata() -> None:
+    favorable_timeout_config = config().model_copy(
+        update={
+            "exit_profile": BacktestExitProfileConfig(
+                fixed_holding_bars=4,
+                favorable_timeout_atr=10.0,
+                favorable_timeout_bars=2,
+            )
+        }
+    )
+
+    report = BacktestEngine(favorable_timeout_config).run(breakout_dataset())
+
+    assert report.trades
+    first_trade = report.trades[0]
+    assert first_trade.holding_bars == 2
+    assert first_trade.metadata["exit_reason"] == "favorable_timeout_exit"
+    assert first_trade.metadata["exit_profile_favorable_timeout_atr"] == pytest.approx(10.0)
+    assert first_trade.metadata["exit_profile_favorable_timeout_bars"] == 2
+
+
+def test_favorable_timeout_requires_threshold_and_bar_pair() -> None:
+    with pytest.raises(ValidationError, match="configured together"):
+        BacktestExitProfileConfig(fixed_holding_bars=4, favorable_timeout_atr=1.0)
+    with pytest.raises(ValidationError, match="below fixed_holding_bars"):
+        BacktestExitProfileConfig(
+            fixed_holding_bars=4,
+            favorable_timeout_atr=1.0,
+            favorable_timeout_bars=4,
+        )
+
+
 def test_backtest_is_deterministic_and_uses_closed_bar_boundary() -> None:
     bars = breakout_dataset()
     engine = BacktestEngine(config())

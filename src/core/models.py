@@ -487,6 +487,8 @@ class BacktestExitProfileConfig(BaseModel):
     close_stop_atr: float | None = Field(default=None, gt=0)
     close_stop_after_bars: int | None = Field(default=None, ge=0, le=32)
     close_target_atr: float | None = Field(default=None, gt=0)
+    favorable_timeout_atr: float | None = Field(default=None, gt=0)
+    favorable_timeout_bars: int | None = Field(default=None, ge=1, le=32)
     partial_targets: tuple[BacktestPartialExitTargetConfig, ...] | None = None
     partial_residual_breakeven: bool | None = None
     partial_residual_trailing_giveback_atr: float | None = Field(default=None, gt=0)
@@ -503,6 +505,8 @@ class BacktestExitProfileConfig(BaseModel):
             or self.close_stop_atr is not None
             or self.close_stop_after_bars is not None
             or self.close_target_atr is not None
+            or self.favorable_timeout_atr is not None
+            or self.favorable_timeout_bars is not None
             or bool(self.partial_targets)
             or self.partial_residual_breakeven
             or self.partial_residual_trailing_giveback_atr is not None
@@ -522,6 +526,12 @@ class BacktestExitProfileConfig(BaseModel):
         if self.close_stop_after_bars is not None and self.close_stop_after_bars >= self.fixed_holding_bars:
             msg = "close_stop_after_bars must be below fixed_holding_bars"
             raise ValueError(msg)
+        if (self.favorable_timeout_atr is None) != (self.favorable_timeout_bars is None):
+            msg = "favorable_timeout_atr and favorable_timeout_bars must be configured together"
+            raise ValueError(msg)
+        if self.favorable_timeout_bars is not None and self.favorable_timeout_bars >= self.fixed_holding_bars:
+            msg = "favorable_timeout_bars must be below fixed_holding_bars"
+            raise ValueError(msg)
         if self.partial_targets:
             partial_fraction = sum(target.quantity_fraction for target in self.partial_targets)
             if partial_fraction >= 1.0:
@@ -537,6 +547,8 @@ class BacktestExitProfileConfig(BaseModel):
                     self.trailing_giveback_atr,
                     self.close_stop_atr,
                     self.close_target_atr,
+                    self.favorable_timeout_atr,
+                    self.favorable_timeout_bars,
                 )
             ):
                 msg = "partial targets cannot be combined with other exit thresholds"
