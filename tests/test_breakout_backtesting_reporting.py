@@ -389,6 +389,26 @@ def test_research_gates_reduce_entries_and_record_skip_counts() -> None:
     assert any(key.startswith("skipped_") for key in skip_counts)
 
 
+def test_occupancy_gate_blocks_entries_until_previous_exit_index() -> None:
+    bars = [*breakout_dataset(), make_bar(11, high=110.0, low=104.0, close=109.0)]
+    baseline_config = config().model_copy(
+        update={"exit_profile": BacktestExitProfileConfig(fixed_holding_bars=4)}
+    )
+    occupancy_config = baseline_config.model_copy(
+        update={
+            "research_gates": BacktestResearchGateConfig(block_overlapping_positions=True)
+        }
+    )
+
+    baseline = BacktestEngine(baseline_config).run(bars)
+    occupancy = BacktestEngine(occupancy_config).run(bars)
+
+    assert len(occupancy.trades) < len(baseline.trades)
+    assert occupancy.parameter_snapshot["research_gate_skip_counts"] == {
+        "skipped_overlapping_position": 3
+    }
+
+
 def test_daily_stop_loss_gate_blocks_after_realized_loss() -> None:
     bars = [*breakout_dataset(), make_bar(11, high=110.0, low=104.0, close=109.0)]
     stop_config = config().model_copy(

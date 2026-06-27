@@ -248,6 +248,9 @@ EXIT_PROFILE_NAMES = {
     "conservative-v1-m15-slope-positive-max-trades-8-hold-8",
     "conservative-v1-m15-slope-positive-max-trades-8-hold-16",
     "conservative-v1-m15-slope-positive-max-trades-8-hold-32",
+    "conservative-v1-m15-slope-positive-max-trades-8-occupancy-hold-8",
+    "conservative-v1-m15-slope-positive-max-trades-8-occupancy-target-2p0-hold-16",
+    "conservative-v1-m15-slope-positive-max-trades-8-occupancy-target-3p0-hold-32",
     "conservative-v1-m15-slope-positive-max-trades-8-close-target-1p0-hold-8",
     "conservative-v1-m15-slope-positive-max-trades-8-partial-50-target-1p0-hold-16",
     "conservative-v1-m15-slope-positive-max-trades-8-partial-30-50-targets-1p0-2p0-hold-16",
@@ -318,11 +321,13 @@ def research_gate_profile(name: str) -> BacktestResearchGateConfig:
         elif name == "conservative-v1-m15-slope-positive-loss-cooldown-12":
             cooldown_bars_after_loss = 12
         max_realized_drawdown = 0.30 if name.endswith("-drawdown-30pct") else None
+        block_overlapping_positions = "-occupancy-" in name
         return BacktestResearchGateConfig(
             min_entry_score=40,
             cooldown_bars_after_trade=3,
             cooldown_bars_after_loss=cooldown_bars_after_loss,
             block_immediate_reentry=True,
+            block_overlapping_positions=block_overlapping_positions,
             max_trades_per_day=max_trades_per_day,
             daily_stop_loss=daily_stop_loss,
             max_realized_drawdown=max_realized_drawdown,
@@ -507,6 +512,12 @@ def exit_profile_config(name: str) -> BacktestExitProfileConfig:
         return BacktestExitProfileConfig(fixed_holding_bars=16)
     if name == "conservative-v1-m15-slope-positive-max-trades-8-hold-32":
         return BacktestExitProfileConfig(fixed_holding_bars=32)
+    if name == "conservative-v1-m15-slope-positive-max-trades-8-occupancy-hold-8":
+        return BacktestExitProfileConfig(fixed_holding_bars=8)
+    if name == "conservative-v1-m15-slope-positive-max-trades-8-occupancy-target-2p0-hold-16":
+        return BacktestExitProfileConfig(fixed_holding_bars=16, target_atr=2.0)
+    if name == "conservative-v1-m15-slope-positive-max-trades-8-occupancy-target-3p0-hold-32":
+        return BacktestExitProfileConfig(fixed_holding_bars=32, target_atr=3.0)
     if name == "conservative-v1-m15-slope-positive-max-trades-8-target-1p0-hold-8":
         return BacktestExitProfileConfig(fixed_holding_bars=8, target_atr=1.0)
     if name == "conservative-v1-m15-slope-positive-max-trades-8-target-2p0-hold-16":

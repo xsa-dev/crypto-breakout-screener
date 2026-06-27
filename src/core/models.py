@@ -402,6 +402,7 @@ class BacktestResearchGateConfig(BaseModel):
     cooldown_bars_after_trade: int = Field(default=0, ge=0)
     cooldown_bars_after_loss: int = Field(default=0, ge=0)
     block_immediate_reentry: bool = False
+    block_overlapping_positions: bool = False
     max_trades_per_day: int | None = Field(default=None, ge=1)
     daily_stop_loss: float | None = Field(default=None, gt=0)
     max_realized_drawdown: float | None = Field(default=None, gt=0, le=1)

@@ -958,6 +958,12 @@ class BacktestEngine:
         gates = self.config.research_gates
         if gates.min_entry_score is not None and score < gates.min_entry_score:
             return "skipped_min_entry_score"
+        if (
+            gates.block_overlapping_positions
+            and gate_state.last_exit_index is not None
+            and index <= gate_state.last_exit_index
+        ):
+            return "skipped_overlapping_position"
         if index <= gate_state.cooldown_until_index:
             return "skipped_cooldown"
         if gates.block_immediate_reentry and gate_state.last_exit_time == current["ts"]:

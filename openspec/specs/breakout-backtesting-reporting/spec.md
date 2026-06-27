@@ -509,26 +509,25 @@ Path-risk diagnostic artifacts SHALL include enough fields to compare favorable 
 - **AND** the labels are computed only from bars inside the configured horizon.
 
 ### Requirement: Backtests compare fixed research exit profiles
-The BTCUSDT batch research runner SHALL support disabled-by-default, fixed, named exit-profile comparisons for path-risk, stop, break-even, trailing, holding, target-only, close-confirmed, partial, protected residual, large-target, realized drawdown-guard, and large-target close-stop exit hypotheses while preserving the existing reference behavior when no exit or drawdown-guard profile is selected.
+The BTCUSDT batch research runner SHALL support disabled-by-default, fixed, named exit-profile comparisons for path-risk, stop, break-even, trailing, holding, target-only, close-confirmed, partial, protected residual, large-target, realized drawdown-guard, large-target close-stop, and occupancy-aware holding/target exit hypotheses while preserving the existing reference behavior when no exit, drawdown-guard, or occupancy profile is selected.
 
-#### Scenario: Large-target close-stop profile is selected
-- **WHEN** a supported large-target close-stop profile is selected
-- **THEN** already-accepted long trades evaluate the configured close-confirmed adverse stop threshold and favorable intrabar or close-confirmed target threshold from entry price using entry-time ATR and post-entry M15 bars only
-- **AND** the close-confirmed stop check is evaluated before favorable target checks on each post-entry bar
-- **AND** the profile remains disabled unless selected by its explicit name
-- **AND** missing entry-time ATR records an explicit counter/reason and falls back to the configured maximum-hold close
-- **AND** entry scoring, M15 slope feature filtering, max-trades risk control, confirmation filters, regime filters, and configured research thresholds remain unchanged.
+#### Scenario: Occupancy-aware holding profile is selected
+- **WHEN** a supported occupancy-aware holding or target profile is selected
+- **THEN** already-accepted long trades evaluate the configured fixed holding and optional favorable target thresholds using existing post-entry M15 bars only
+- **AND** new entries are skipped while the previous simulated trade remains inside its holding interval
+- **AND** the occupancy gate remains disabled unless selected by an explicit profile name
+- **AND** skip counts include a machine-readable occupancy reason
+- **AND** entry scoring, M15 slope feature filtering, max-trades risk control, confirmation filters, regime filters, cost assumptions, and configured research thresholds remain unchanged.
 
 ### Requirement: Exit-profile batch summaries are auditable
-BTCUSDT batch summaries SHALL expose exit-profile and realized drawdown-guard comparison results separately from gate, feature-filter, risk-control, regime-filter, and confirmation-filter dimensions.
+BTCUSDT batch summaries SHALL expose exit-profile, occupancy gate, and realized drawdown-guard comparison results separately from feature-filter, regime-filter, confirmation-filter, and cost dimensions.
 
-#### Scenario: Large-target close-stop profile is evaluated against realistic costs
-- **WHEN** a large-target close-stop profile is evaluated for the BTCUSDT quarterly `2023q1..2024q4` scorecard
-- **THEN** success requires all eight quarters to pass after realistic costs with unchanged thresholds
-- **AND** the summary records the close-stop, target, holding, and cost settings
-- **AND** baseline-only pass counts are recorded as insufficient unless the realistic-cost scorecard also reaches `8/8`
-- **AND** a candidate may stop after a failed required realistic-cost quarter only when the remaining required quarters are recorded as blocked/not run after early falsification and are not counted as passes
-- **AND** a below-`8/8` result is archived as falsified research evidence with scorecard artifacts and no success notification.
+#### Scenario: Occupancy-aware profile is evaluated against the quarterly scorecard
+- **WHEN** an occupancy-aware holding or target profile is evaluated for the BTCUSDT quarterly `2023q1..2024q4` scorecard
+- **THEN** success requires all eight quarters to pass unchanged configured research thresholds
+- **AND** the summary records the occupancy setting, exit settings, cost settings, per-quarter metrics, blockers, and artifact paths
+- **AND** no missing or skipped quarter is counted as a pass
+- **AND** a below-`8/8` result is archived as falsified research evidence with no success notification.
 
 ### Requirement: Realistic-cost breakout profile search uses fixed eight-quarter gates
 The BTCUSDT breakout research runner SHALL evaluate robust profile-search candidates against exactly the eight quarterly windows `2023q1`, `2023q2`, `2023q3`, `2023q4`, `2024q1`, `2024q2`, `2024q3`, and `2024q4`, using unchanged research thresholds: `min_trade_count=1`, `min_net_profit=0.0`, `min_profit_factor=1.0`, `min_max_drawdown=-0.35`, and `require_no_feed_gaps=true`.
