@@ -509,6 +509,40 @@ def test_batch_runner_records_exit_profile(tmp_path) -> None:
     }
     assert seen_exit_profiles[-1] == close_stop_row.exit_profile_settings
 
+    large_target_breakeven_profile = (
+        "conservative-v1-m15-slope-positive-max-trades-8-"
+        "target-4p0-breakeven-1p0-hold-32"
+    )
+    breakeven_result = run_batch_experiment(
+        windows=windows,
+        output_dir=tmp_path / "breakeven-target-backtests",
+        market_data_dir=tmp_path / "breakeven-target-market-data",
+        gate_profile=large_target_breakeven_profile,
+        download=_fake_download_factory(tmp_path),
+        run_single=run_single,
+    )
+    breakeven_row = breakeven_result.summary.windows[0]
+    assert breakeven_row.exit_profile == large_target_breakeven_profile
+    assert breakeven_row.exit_profile_settings == {
+        "fixed_holding_bars": 32,
+        "target_atr": 4.0,
+        "breakeven_after_atr": 1.0,
+    }
+    assert breakeven_row.risk_control_profile == "conservative-v1-m15-slope-positive-max-trades-8"
+
+    close_target_breakeven_profile = (
+        "conservative-v1-m15-slope-positive-max-trades-8-"
+        "close-target-2p0-breakeven-1p0-hold-32"
+    )
+    assert exit_profile_config(close_target_breakeven_profile).model_dump(
+        mode="json",
+        exclude_none=True,
+    ) == {
+        "fixed_holding_bars": 32,
+        "breakeven_after_atr": 1.0,
+        "close_target_atr": 2.0,
+    }
+
     occupancy_hold_profile = (
         "conservative-v1-m15-slope-positive-max-trades-8-occupancy-hold-8"
     )
