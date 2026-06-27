@@ -327,7 +327,7 @@ def test_batch_runner_records_exit_profile(tmp_path) -> None:
     seen_exit_profiles: list[dict[str, Any]] = []
 
     def run_single(**kwargs: Any) -> CryptoExperimentResult:
-        seen_exit_profiles.append(kwargs["exit_profile"].model_dump(mode="json"))
+        seen_exit_profiles.append(kwargs["exit_profile"].model_dump(mode="json", exclude_none=True))
         return _fake_run_factory(tmp_path)(**kwargs)
 
     profile = "conservative-v1-m15-slope-positive-max-trades-8-atr-stop-1p0-target-1p5"
@@ -349,7 +349,7 @@ def test_batch_runner_records_exit_profile(tmp_path) -> None:
         "target_atr": 1.5,
     }
     assert seen_exit_profiles == [row.exit_profile_settings]
-    assert exit_profile_config(profile).model_dump(mode="json") == row.exit_profile_settings
+    assert exit_profile_config(profile).model_dump(mode="json", exclude_none=True) == row.exit_profile_settings
 
     with result.summary_csv_path.open(newline="", encoding="utf-8") as file:
         rows = list(csv.DictReader(file))
@@ -362,10 +362,17 @@ def test_batch_runner_records_exit_profile(tmp_path) -> None:
     assert summary["exit_profile_settings"] == row.exit_profile_settings
 
     tight_stop_profile = "conservative-v1-m15-slope-positive-max-trades-8-atr-stop-0p01-target-2p0"
-    assert exit_profile_config(tight_stop_profile).model_dump(mode="json") == {
+    assert exit_profile_config(tight_stop_profile).model_dump(mode="json", exclude_none=True) == {
         "fixed_holding_bars": 1,
         "stop_atr": 0.01,
         "target_atr": 2.0,
+    }
+
+    trailing_profile = "conservative-v1-m15-slope-positive-max-trades-8-trail-1p0-giveback-0p5-hold-8"
+    assert exit_profile_config(trailing_profile).model_dump(mode="json", exclude_none=True) == {
+        "fixed_holding_bars": 8,
+        "trailing_after_atr": 1.0,
+        "trailing_giveback_atr": 0.5,
     }
 
 

@@ -558,6 +558,18 @@ class BacktestEngine:
             exit_metadata["exit_profile_stop_atr"] = float(exit_profile["stop_atr"])
         if exit_profile["target_atr"] is not None:
             exit_metadata["exit_profile_target_atr"] = float(exit_profile["target_atr"])
+        if exit_profile["breakeven_after_atr"] is not None:
+            exit_metadata["exit_profile_breakeven_after_atr"] = float(
+                exit_profile["breakeven_after_atr"]
+            )
+        if exit_profile["trailing_after_atr"] is not None:
+            exit_metadata["exit_profile_trailing_after_atr"] = float(
+                exit_profile["trailing_after_atr"]
+            )
+        if exit_profile["trailing_giveback_atr"] is not None:
+            exit_metadata["exit_profile_trailing_giveback_atr"] = float(
+                exit_profile["trailing_giveback_atr"]
+            )
         return BacktestTrade(
             trade_id=trade_id,
             symbol=current["symbol"],
@@ -598,20 +610,57 @@ class BacktestEngine:
         fallback_reason = "fixed_holding_close"
         if fallback_holding < profile.fixed_holding_bars:
             fallback_reason = "insufficient_future_bars_close"
-        if profile.stop_atr is None or profile.target_atr is None:
+        requires_atr = any(
+            value is not None
+            for value in (
+                profile.stop_atr,
+                profile.target_atr,
+                profile.breakeven_after_atr,
+                profile.trailing_after_atr,
+                profile.trailing_giveback_atr,
+            )
+        )
+        if not requires_atr:
             return fallback_bar, fallback_bar["close"], fallback_holding, fallback_reason
         atr = feature_snapshot.get("feature_atr")
         if not isinstance(atr, int | float) or atr <= 0:
             return fallback_bar, fallback_bar["close"], fallback_holding, "missing_entry_atr_fixed_holding_close"
-        stop_price = entry_price - float(profile.stop_atr) * float(atr)
-        target_price = entry_price + float(profile.target_atr) * float(atr)
+        atr_value = float(atr)
+        stop_price = entry_price - float(profile.stop_atr) * atr_value if profile.stop_atr else None
+        target_price = entry_price + float(profile.target_atr) * atr_value if profile.target_atr else None
+        breakeven_activation = (
+            entry_price + float(profile.breakeven_after_atr) * atr_value
+            if profile.breakeven_after_atr is not None
+            else None
+        )
+        trailing_activation = (
+            entry_price + float(profile.trailing_after_atr) * atr_value
+            if profile.trailing_after_atr is not None
+            else None
+        )
+        breakeven_active = False
+        trailing_active = False
+        trailing_high: float | None = None
         for offset, bar in enumerate(bars[: profile.fixed_holding_bars], start=1):
-            stop_hit = bar["low"] <= stop_price
-            target_hit = bar["high"] >= target_price
-            if stop_hit:
+            if stop_price is not None and bar["low"] <= stop_price:
                 return bar, stop_price, offset, "atr_stop"
-            if target_hit:
+            if breakeven_active and bar["low"] <= entry_price:
+                return bar, entry_price, offset, "breakeven_exit"
+            if trailing_active:
+                if profile.trailing_giveback_atr is not None:
+                    trailing_stop = (trailing_high or bar["high"]) - float(
+                        profile.trailing_giveback_atr
+                    ) * atr_value
+                    if bar["low"] <= trailing_stop:
+                        return bar, trailing_stop, offset, "trailing_exit"
+                trailing_high = max(trailing_high or bar["high"], bar["high"])
+            if target_price is not None and bar["high"] >= target_price:
                 return bar, target_price, offset, "atr_target"
+            if breakeven_activation is not None and bar["high"] >= breakeven_activation:
+                breakeven_active = True
+            if trailing_activation is not None and bar["high"] >= trailing_activation:
+                trailing_active = True
+                trailing_high = max(trailing_high or bar["high"], bar["high"])
         return fallback_bar, fallback_bar["close"], fallback_holding, fallback_reason
 
     def _entry_feature_snapshot(

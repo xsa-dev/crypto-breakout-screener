@@ -509,7 +509,7 @@ Path-risk diagnostic artifacts SHALL include enough fields to compare favorable 
 - **AND** the labels are computed only from bars inside the configured horizon.
 
 ### Requirement: Backtests compare fixed research exit profiles
-The BTCUSDT batch research runner SHALL support disabled-by-default, fixed, named exit-profile comparisons for path-risk, stop, and holding hypotheses while preserving the existing reference behavior when no exit profile is selected.
+The BTCUSDT batch research runner SHALL support disabled-by-default, fixed, named exit-profile comparisons for path-risk, stop, break-even, trailing, and holding hypotheses while preserving the existing reference behavior when no exit profile is selected.
 
 #### Scenario: Exit profile is disabled
 - **WHEN** a backtest or batch runs without a configured exit profile
@@ -527,6 +527,18 @@ The BTCUSDT batch research runner SHALL support disabled-by-default, fixed, name
 - **AND** if stop and target are touched in the same bar, the stop is selected first
 - **AND** missing entry-time ATR records an explicit counter/reason and falls back to the configured maximum-hold close.
 
+#### Scenario: Break-even exit profile is selected
+- **WHEN** a supported break-even exit profile is selected
+- **THEN** already-accepted long trades activate break-even protection only after price first reaches the configured favorable ATR threshold from entry
+- **AND** a later touch of the entry price exits at entry without using future bars
+- **AND** missing entry-time ATR records an explicit counter/reason and falls back to the configured maximum-hold close.
+
+#### Scenario: Trailing exit profile is selected
+- **WHEN** a supported trailing exit profile is selected
+- **THEN** already-accepted long trades activate trailing protection only after price first reaches the configured favorable ATR threshold from entry
+- **AND** the trailing stop is calculated from the maximum high observed after activation minus the configured ATR giveback
+- **AND** missing entry-time ATR records an explicit counter/reason and falls back to the configured maximum-hold close.
+
 ### Requirement: Exit-profile batch summaries are auditable
 BTCUSDT batch summaries SHALL expose exit-profile comparison results separately from gate, feature-filter, risk-control, regime-filter, and confirmation-filter dimensions.
 
@@ -540,7 +552,7 @@ BTCUSDT batch summaries SHALL expose exit-profile comparison results separately 
 - **WHEN** quarterly 2023-2024 BTCUSDT batches finish for fixed exit profiles
 - **THEN** the report states pass/fail status for `2023q1`, `2023q2`, `2023q3`, `2023q4`, `2024q1`, `2024q2`, `2024q3`, and `2024q4`
 - **AND** remaining failed windows list blockers
-- **AND** the report states whether any exit profile reached 8/8, moved the score toward 8/8, or failed to support the hypothesis.
+- **AND** the report states whether any exit profile reached `8/8` after realistic costs, moved the score toward `8/8`, or failed to support the hypothesis.
 
 ### Requirement: Realistic-cost breakout profile search uses fixed eight-quarter gates
 The BTCUSDT breakout research runner SHALL evaluate robust profile-search candidates against exactly the eight quarterly windows `2023q1`, `2023q2`, `2023q3`, `2023q4`, `2024q1`, `2024q2`, `2024q3`, and `2024q4`, using unchanged research thresholds: `min_trade_count=1`, `min_net_profit=0.0`, `min_profit_factor=1.0`, `min_max_drawdown=-0.35`, and `require_no_feed_gaps=true`.

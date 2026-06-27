@@ -471,15 +471,28 @@ class BacktestExitProfileConfig(BaseModel):
     fixed_holding_bars: int = Field(default=1, ge=1, le=16)
     stop_atr: float | None = Field(default=None, gt=0)
     target_atr: float | None = Field(default=None, gt=0)
+    breakeven_after_atr: float | None = Field(default=None, gt=0)
+    trailing_after_atr: float | None = Field(default=None, gt=0)
+    trailing_giveback_atr: float | None = Field(default=None, gt=0)
 
     @property
     def configured(self) -> bool:
-        return self.fixed_holding_bars != 1 or self.stop_atr is not None or self.target_atr is not None
+        return bool(
+            self.fixed_holding_bars != 1
+            or self.stop_atr is not None
+            or self.target_atr is not None
+            or self.breakeven_after_atr is not None
+            or self.trailing_after_atr is not None
+            or self.trailing_giveback_atr is not None
+        )
 
     @model_validator(mode="after")
     def validate_exit_profile(self) -> "BacktestExitProfileConfig":
         if (self.stop_atr is None) != (self.target_atr is None):
             msg = "stop_atr and target_atr must be configured together"
+            raise ValueError(msg)
+        if (self.trailing_after_atr is None) != (self.trailing_giveback_atr is None):
+            msg = "trailing_after_atr and trailing_giveback_atr must be configured together"
             raise ValueError(msg)
         return self
 

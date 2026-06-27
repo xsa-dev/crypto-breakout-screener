@@ -247,6 +247,9 @@ EXIT_PROFILE_NAMES = {
     "conservative-v1-m15-slope-positive-max-trades-8-atr-stop-0p01-target-2p0",
     "conservative-v1-m15-slope-positive-max-trades-8-atr-stop-1p0-target-1p5",
     "conservative-v1-m15-slope-positive-max-trades-8-atr-stop-1p5-target-2p0",
+    "conservative-v1-m15-slope-positive-max-trades-8-breakeven-1p0-hold-8",
+    "conservative-v1-m15-slope-positive-max-trades-8-trail-1p0-giveback-0p5-hold-8",
+    "conservative-v1-m15-slope-positive-max-trades-8-trail-1p0-giveback-1p0-hold-16",
 }
 
 
@@ -474,6 +477,20 @@ def exit_profile_config(name: str) -> BacktestExitProfileConfig:
         return BacktestExitProfileConfig(fixed_holding_bars=4, stop_atr=1.0, target_atr=1.5)
     if name == "conservative-v1-m15-slope-positive-max-trades-8-atr-stop-1p5-target-2p0":
         return BacktestExitProfileConfig(fixed_holding_bars=8, stop_atr=1.5, target_atr=2.0)
+    if name == "conservative-v1-m15-slope-positive-max-trades-8-breakeven-1p0-hold-8":
+        return BacktestExitProfileConfig(fixed_holding_bars=8, breakeven_after_atr=1.0)
+    if name == "conservative-v1-m15-slope-positive-max-trades-8-trail-1p0-giveback-0p5-hold-8":
+        return BacktestExitProfileConfig(
+            fixed_holding_bars=8,
+            trailing_after_atr=1.0,
+            trailing_giveback_atr=0.5,
+        )
+    if name == "conservative-v1-m15-slope-positive-max-trades-8-trail-1p0-giveback-1p0-hold-16":
+        return BacktestExitProfileConfig(
+            fixed_holding_bars=16,
+            trailing_after_atr=1.0,
+            trailing_giveback_atr=1.0,
+        )
     return BacktestExitProfileConfig()
 
 
@@ -543,7 +560,9 @@ def run_batch_experiment(
     )
     active_exit_config = exit_profile_config(active_exit_profile)
     exit_profile_settings = (
-        active_exit_config.model_dump(mode="json") if active_exit_profile != "none" else {}
+        active_exit_config.model_dump(mode="json", exclude_none=True)
+        if active_exit_profile != "none"
+        else {}
     )
     cost_model_settings = _cost_model_settings(
         spread=spread,
@@ -834,7 +853,9 @@ def _run_batch_window(
         regime_filter_skip_counts=_regime_filter_skip_counts(result.artifact_dir / f"{result.run_id}-parameters.json"),
         confirmation_filter_settings=confirmation_filters.model_dump(mode="json") if confirmation_filter_profile != "none" else {},
         confirmation_filter_skip_counts=_confirmation_filter_skip_counts(result.artifact_dir / f"{result.run_id}-parameters.json"),
-        exit_profile_settings=exit_profile_config.model_dump(mode="json") if exit_profile != "none" else {},
+        exit_profile_settings=exit_profile_config.model_dump(mode="json", exclude_none=True)
+        if exit_profile != "none"
+        else {},
         exit_profile_counts=_exit_profile_counts(result.artifact_dir / f"{result.run_id}-parameters.json"),
         cost_model_settings=cost_model_settings,
         status="passed",
