@@ -618,6 +618,42 @@ def test_batch_runner_records_exit_profile(tmp_path) -> None:
     }
     assert seen_exit_profiles[-1] == delayed_row.exit_profile_settings
 
+    profit_lock_profile = (
+        "conservative-v1-m15-slope-positive-max-trades-8-"
+        "target-4p0-trail-2p0-giveback-1p0-hold-32"
+    )
+    profit_lock_result = run_batch_experiment(
+        windows=windows,
+        output_dir=tmp_path / "profit-lock-trailing-backtests",
+        market_data_dir=tmp_path / "profit-lock-trailing-market-data",
+        gate_profile=profit_lock_profile,
+        download=_fake_download_factory(tmp_path),
+        run_single=run_single,
+    )
+    profit_lock_row = profit_lock_result.summary.windows[0]
+    assert profit_lock_row.exit_profile == profit_lock_profile
+    assert profit_lock_row.exit_profile_settings == {
+        "fixed_holding_bars": 32,
+        "target_atr": 4.0,
+        "trailing_after_atr": 2.0,
+        "trailing_giveback_atr": 1.0,
+    }
+    assert seen_exit_profiles[-1] == profit_lock_row.exit_profile_settings
+
+    close_target_profit_lock_profile = (
+        "conservative-v1-m15-slope-positive-max-trades-8-"
+        "close-target-2p0-trail-1p5-giveback-1p0-hold-32"
+    )
+    assert exit_profile_config(close_target_profit_lock_profile).model_dump(
+        mode="json", exclude_none=True
+    ) == {
+        "fixed_holding_bars": 32,
+        "trailing_after_atr": 1.5,
+        "trailing_giveback_atr": 1.0,
+        "close_target_atr": 2.0,
+    }
+
+
 
 def test_batch_runner_passes_and_records_cost_model_settings(tmp_path) -> None:
     windows = [
