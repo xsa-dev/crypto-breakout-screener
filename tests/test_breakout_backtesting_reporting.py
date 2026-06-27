@@ -405,9 +405,31 @@ def test_daily_stop_loss_gate_blocks_after_realized_loss() -> None:
     assert "skipped_daily_stop_loss" in skip_counts
 
 
+def test_max_realized_drawdown_gate_blocks_after_realized_drawdown() -> None:
+    bars = [*breakout_dataset(), make_bar(11, high=110.0, low=104.0, close=109.0)]
+    drawdown_config = config().model_copy(
+        update={
+            "research_gates": BacktestResearchGateConfig(
+                max_realized_drawdown=0.0001,
+            )
+        }
+    )
+
+    report = BacktestEngine(drawdown_config).run(bars)
+
+    skip_counts = report.parameter_snapshot["research_gate_skip_counts"]
+    assert isinstance(skip_counts, dict)
+    assert "skipped_max_realized_drawdown" in skip_counts
+
+
 def test_research_gate_config_rejects_zero_daily_stop_loss() -> None:
     with pytest.raises(ValidationError, match="daily_stop_loss"):
         BacktestResearchGateConfig(daily_stop_loss=0.0)
+
+
+def test_research_gate_config_rejects_zero_max_realized_drawdown() -> None:
+    with pytest.raises(ValidationError, match="max_realized_drawdown"):
+        BacktestResearchGateConfig(max_realized_drawdown=0.0)
 
 
 def test_daily_stop_loss_uses_exit_day_for_midnight_crossing_loss() -> None:

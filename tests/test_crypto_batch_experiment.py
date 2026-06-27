@@ -325,9 +325,11 @@ def test_batch_runner_records_exit_profile(tmp_path) -> None:
         )
     ]
     seen_exit_profiles: list[dict[str, Any]] = []
+    seen_gate_profiles: list[dict[str, Any]] = []
 
     def run_single(**kwargs: Any) -> CryptoExperimentResult:
         seen_exit_profiles.append(kwargs["exit_profile"].model_dump(mode="json", exclude_none=True))
+        seen_gate_profiles.append(kwargs["research_gates"].model_dump(mode="json", exclude_none=True))
         return _fake_run_factory(tmp_path)(**kwargs)
 
     profile = "conservative-v1-m15-slope-positive-max-trades-8-atr-stop-1p0-target-1p5"
@@ -410,6 +412,27 @@ def test_batch_runner_records_exit_profile(tmp_path) -> None:
         "fixed_holding_bars": 32,
         "target_atr": 4.0,
     }
+
+    target_drawdown_profile = (
+        "conservative-v1-m15-slope-positive-max-trades-8-target-4p0-hold-32-"
+        "drawdown-30pct"
+    )
+    drawdown_result = run_batch_experiment(
+        windows=windows,
+        output_dir=tmp_path / "drawdown-backtests",
+        market_data_dir=tmp_path / "drawdown-market-data",
+        gate_profile=target_drawdown_profile,
+        download=_fake_download_factory(tmp_path),
+        run_single=run_single,
+    )
+    drawdown_row = drawdown_result.summary.windows[0]
+    assert drawdown_row.exit_profile == target_drawdown_profile
+    assert drawdown_row.exit_profile_settings == {
+        "fixed_holding_bars": 32,
+        "target_atr": 4.0,
+    }
+    assert drawdown_row.risk_control_settings["max_realized_drawdown"] == 0.30
+    assert seen_gate_profiles[-1]["max_realized_drawdown"] == 0.30
 
     close_target_only_profile = (
         "conservative-v1-m15-slope-positive-max-trades-8-close-target-1p0-hold-8"

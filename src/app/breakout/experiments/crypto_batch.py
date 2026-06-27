@@ -268,6 +268,9 @@ EXIT_PROFILE_NAMES = {
     "conservative-v1-m15-slope-positive-max-trades-8-target-4p0-hold-32",
     "conservative-v1-m15-slope-positive-max-trades-8-close-stop-0p5-close-target-2p0-hold-16",
     "conservative-v1-m15-slope-positive-max-trades-8-close-target-2p0-hold-32",
+    "conservative-v1-m15-slope-positive-max-trades-8-target-3p0-hold-32-drawdown-30pct",
+    "conservative-v1-m15-slope-positive-max-trades-8-target-4p0-hold-32-drawdown-30pct",
+    "conservative-v1-m15-slope-positive-max-trades-8-close-target-2p0-hold-32-drawdown-30pct",
     "conservative-v1-m15-slope-positive-max-trades-8-close-stop-0p5-hold-8",
     "conservative-v1-m15-slope-positive-max-trades-8-close-stop-1p0-hold-16",
     "conservative-v1-m15-slope-positive-max-trades-8-trail-1p0-giveback-0p5-hold-8",
@@ -311,6 +314,7 @@ def research_gate_profile(name: str) -> BacktestResearchGateConfig:
             max_trades_per_day = 8
         elif name == "conservative-v1-m15-slope-positive-loss-cooldown-12":
             cooldown_bars_after_loss = 12
+        max_realized_drawdown = 0.30 if name.endswith("-drawdown-30pct") else None
         return BacktestResearchGateConfig(
             min_entry_score=40,
             cooldown_bars_after_trade=3,
@@ -318,6 +322,7 @@ def research_gate_profile(name: str) -> BacktestResearchGateConfig:
             block_immediate_reentry=True,
             max_trades_per_day=max_trades_per_day,
             daily_stop_loss=daily_stop_loss,
+            max_realized_drawdown=max_realized_drawdown,
         )
     msg = f"unsupported gate profile: {name}"
     raise ValueError(msg)
@@ -505,11 +510,17 @@ def exit_profile_config(name: str) -> BacktestExitProfileConfig:
         return BacktestExitProfileConfig(fixed_holding_bars=16, target_atr=2.0)
     if name == "conservative-v1-m15-slope-positive-max-trades-8-target-3p0-hold-32":
         return BacktestExitProfileConfig(fixed_holding_bars=32, target_atr=3.0)
+    if name == "conservative-v1-m15-slope-positive-max-trades-8-target-3p0-hold-32-drawdown-30pct":
+        return BacktestExitProfileConfig(fixed_holding_bars=32, target_atr=3.0)
     if name == "conservative-v1-m15-slope-positive-max-trades-8-target-4p0-hold-32":
+        return BacktestExitProfileConfig(fixed_holding_bars=32, target_atr=4.0)
+    if name == "conservative-v1-m15-slope-positive-max-trades-8-target-4p0-hold-32-drawdown-30pct":
         return BacktestExitProfileConfig(fixed_holding_bars=32, target_atr=4.0)
     if name == "conservative-v1-m15-slope-positive-max-trades-8-close-target-1p0-hold-8":
         return BacktestExitProfileConfig(fixed_holding_bars=8, close_target_atr=1.0)
     if name == "conservative-v1-m15-slope-positive-max-trades-8-close-target-2p0-hold-32":
+        return BacktestExitProfileConfig(fixed_holding_bars=32, close_target_atr=2.0)
+    if name == "conservative-v1-m15-slope-positive-max-trades-8-close-target-2p0-hold-32-drawdown-30pct":
         return BacktestExitProfileConfig(fixed_holding_bars=32, close_target_atr=2.0)
     if name == "conservative-v1-m15-slope-positive-max-trades-8-partial-50-target-1p0-hold-16":
         return BacktestExitProfileConfig(

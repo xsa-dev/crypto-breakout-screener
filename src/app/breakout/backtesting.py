@@ -49,6 +49,8 @@ class ResearchGateState:
     cooldown_until_index: int = -1
     trades_by_day: dict[str, int] = field(default_factory=dict)
     pnl_by_day: dict[str, float] = field(default_factory=dict)
+    realized_equity: float | None = None
+    peak_realized_equity: float | None = None
     skip_counts: Counter[str] = field(default_factory=Counter)
 
 
@@ -123,6 +125,8 @@ class BacktestEngine:
         ]
         unavailable: dict[str, str] = {}
         gate_state = ResearchGateState()
+        gate_state.realized_equity = equity
+        gate_state.peak_realized_equity = equity
         pending_candidate: PendingBreakoutCandidate | None = None
 
         for index in range(self.config.min_warmup_bars, len(ordered) - 1):
@@ -965,6 +969,15 @@ class BacktestEngine:
         if gates.daily_stop_loss is not None:
             if gate_state.pnl_by_day.get(day_key, 0.0) <= -gates.daily_stop_loss:
                 return "skipped_daily_stop_loss"
+        if gates.max_realized_drawdown is not None:
+            realized_equity = gate_state.realized_equity
+            peak_realized_equity = gate_state.peak_realized_equity
+            if realized_equity is not None and peak_realized_equity is not None:
+                realized_drawdown = (
+                    peak_realized_equity - realized_equity
+                ) / self.config.initial_equity
+                if realized_drawdown >= gates.max_realized_drawdown:
+                    return "skipped_max_realized_drawdown"
         return None
 
     def _feature_filter_reason(
@@ -1016,6 +1029,12 @@ class BacktestEngine:
         day_key = trade.exit_time.date().isoformat()
         gate_state.trades_by_day[day_key] = gate_state.trades_by_day.get(day_key, 0) + 1
         gate_state.pnl_by_day[day_key] = gate_state.pnl_by_day.get(day_key, 0.0) + trade.net_pnl
+        realized_equity = (gate_state.realized_equity or self.config.initial_equity) + trade.net_pnl
+        gate_state.realized_equity = realized_equity
+        gate_state.peak_realized_equity = max(
+            gate_state.peak_realized_equity or self.config.initial_equity,
+            realized_equity,
+        )
         gate_state.last_exit_time = trade.exit_time
         gate_state.last_exit_index = index + trade.holding_bars
         gate_state.last_trade_net_pnl = trade.net_pnl

@@ -404,6 +404,7 @@ class BacktestResearchGateConfig(BaseModel):
     block_immediate_reentry: bool = False
     max_trades_per_day: int | None = Field(default=None, ge=1)
     daily_stop_loss: float | None = Field(default=None, gt=0)
+    max_realized_drawdown: float | None = Field(default=None, gt=0, le=1)
 
 
 class BacktestFeatureFilterConfig(BaseModel):
