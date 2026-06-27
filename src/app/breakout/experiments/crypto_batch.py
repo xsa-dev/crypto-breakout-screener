@@ -73,6 +73,7 @@ BATCH_SUMMARY_COLUMNS = [
     "confirmation_filter_skip_counts_json",
     "exit_profile_settings_json",
     "exit_profile_counts_json",
+    "cost_model_settings_json",
     "feature_artifact_paths_json",
     "downloaded_csv_paths_json",
     "manifest_path",
@@ -147,6 +148,7 @@ class BatchWindowSummary(BaseModel):
     confirmation_filter_skip_counts: dict[str, int] = Field(default_factory=dict)
     exit_profile_settings: dict[str, Any] = Field(default_factory=dict)
     exit_profile_counts: dict[str, int] = Field(default_factory=dict)
+    cost_model_settings: dict[str, Any] = Field(default_factory=dict)
     feature_artifact_paths: dict[str, str] = Field(default_factory=dict)
     downloaded_csv_paths: dict[str, str] = Field(default_factory=dict)
     manifest_path: str | None = None
@@ -193,6 +195,7 @@ class BatchExperimentSummary(BaseModel):
     regime_filter_settings: dict[str, Any] = Field(default_factory=dict)
     confirmation_filter_settings: dict[str, Any] = Field(default_factory=dict)
     exit_profile_settings: dict[str, Any] = Field(default_factory=dict)
+    cost_model_settings: dict[str, Any] = Field(default_factory=dict)
     context_timeframes: list[str] = Field(default_factory=lambda: ["H1", "H4", "D1"])
     windows: list[BatchWindowSummary]
     aggregate: BatchAggregate
@@ -494,6 +497,13 @@ def run_batch_experiment(
     enable_bad_regime_diagnostics: bool = False,
     enable_forward_path_diagnostics: bool = False,
     enable_path_risk_diagnostics: bool = False,
+    reuse_market_data: bool = False,
+    spread: float = 0.10,
+    slippage: float = 0.02,
+    commission_per_unit: float = 0.01,
+    funding_per_bar: float = 0.0,
+    commission_rate: float = 0.0,
+    funding_rate_per_bar: float = 0.0,
     symbol: str = "BTCUSDT",
     continue_on_error: bool = True,
     download: DownloadCallable = download_bybit_public_ohlcv_sync,
@@ -535,6 +545,14 @@ def run_batch_experiment(
     exit_profile_settings = (
         active_exit_config.model_dump(mode="json") if active_exit_profile != "none" else {}
     )
+    cost_model_settings = _cost_model_settings(
+        spread=spread,
+        slippage=slippage,
+        commission_per_unit=commission_per_unit,
+        funding_per_bar=funding_per_bar,
+        commission_rate=commission_rate,
+        funding_rate_per_bar=funding_rate_per_bar,
+    )
     batch_id = _batch_id(
         windows=windows,
         thresholds=active_thresholds,
@@ -550,6 +568,7 @@ def run_batch_experiment(
         confirmation_filter_settings=confirmation_filter_settings,
         exit_profile=active_exit_profile,
         exit_profile_settings=exit_profile_settings,
+        cost_model_settings=cost_model_settings,
         bad_regime_diagnostics_enabled=enable_bad_regime_diagnostics,
         forward_path_diagnostics_enabled=enable_forward_path_diagnostics,
         path_risk_diagnostics_enabled=enable_path_risk_diagnostics,
@@ -576,6 +595,14 @@ def run_batch_experiment(
                 feature_filters=active_feature_filters,
                 confirmation_filters=active_confirmation_filters,
                 exit_profile_config=active_exit_config,
+                cost_model_settings=cost_model_settings,
+                reuse_market_data=reuse_market_data,
+                spread=spread,
+                slippage=slippage,
+                commission_per_unit=commission_per_unit,
+                funding_per_bar=funding_per_bar,
+                commission_rate=commission_rate,
+                funding_rate_per_bar=funding_rate_per_bar,
                 forward_path_diagnostics=enable_forward_path_diagnostics,
                 path_risk_diagnostics=enable_path_risk_diagnostics,
                 download=download,
@@ -598,6 +625,7 @@ def run_batch_experiment(
                 regime_filter_settings=regime_filter_settings,
                 confirmation_filter_settings=confirmation_filter_settings,
                 exit_profile_settings=exit_profile_settings,
+                cost_model_settings=cost_model_settings,
                 status="failed",
                 blockers=[f"window_exception:{type(exc).__name__}:{exc}"],
             )
@@ -637,6 +665,7 @@ def run_batch_experiment(
         regime_filter_settings=regime_filter_settings,
         confirmation_filter_settings=confirmation_filter_settings,
         exit_profile_settings=exit_profile_settings,
+        cost_model_settings=cost_model_settings,
         windows=rows,
         aggregate=aggregate,
         bad_regime_diagnostics_enabled=enable_bad_regime_diagnostics,
@@ -727,6 +756,14 @@ def _run_batch_window(
     feature_filters: BacktestFeatureFilterConfig,
     confirmation_filters: BacktestConfirmationFilterConfig,
     exit_profile_config: BacktestExitProfileConfig,
+    cost_model_settings: dict[str, Any],
+    reuse_market_data: bool,
+    spread: float,
+    slippage: float,
+    commission_per_unit: float,
+    funding_per_bar: float,
+    commission_rate: float,
+    funding_rate_per_bar: float,
     forward_path_diagnostics: bool,
     path_risk_diagnostics: bool,
     download: DownloadCallable,
@@ -734,11 +771,20 @@ def _run_batch_window(
 ) -> BatchWindowSummary:
     start = to_utc(window.start)
     end = to_utc(window.end)
-    downloaded = download(
-        start=start,
-        end=end,
-        output_dir=market_data_dir,
-        symbol=symbol,
+    downloaded = (
+        _cached_public_download(
+            start=start,
+            end=end,
+            market_data_dir=market_data_dir,
+            symbol=symbol,
+        )
+        if reuse_market_data
+        else download(
+            start=start,
+            end=end,
+            output_dir=market_data_dir,
+            symbol=symbol,
+        )
     )
     context_paths = {
         timeframe: path
@@ -756,6 +802,12 @@ def _run_batch_window(
         feature_filters=feature_filters,
         confirmation_filters=confirmation_filters,
         exit_profile=exit_profile_config,
+        spread=spread,
+        slippage=slippage,
+        commission_per_unit=commission_per_unit,
+        funding_per_bar=funding_per_bar,
+        commission_rate=commission_rate,
+        funding_rate_per_bar=funding_rate_per_bar,
         forward_path_diagnostics=forward_path_diagnostics,
         path_risk_diagnostics=path_risk_diagnostics,
     )
@@ -784,6 +836,7 @@ def _run_batch_window(
         confirmation_filter_skip_counts=_confirmation_filter_skip_counts(result.artifact_dir / f"{result.run_id}-parameters.json"),
         exit_profile_settings=exit_profile_config.model_dump(mode="json") if exit_profile != "none" else {},
         exit_profile_counts=_exit_profile_counts(result.artifact_dir / f"{result.run_id}-parameters.json"),
+        cost_model_settings=cost_model_settings,
         status="passed",
         run_id=result.run_id,
         dataset_hash=result.dataset_hash,
@@ -1551,6 +1604,7 @@ def _csv_row(row: BatchWindowSummary) -> dict[str, str | int | float | None]:
         "confirmation_filter_skip_counts_json": json.dumps(row.confirmation_filter_skip_counts, sort_keys=True),
         "exit_profile_settings_json": json.dumps(row.exit_profile_settings, sort_keys=True),
         "exit_profile_counts_json": json.dumps(row.exit_profile_counts, sort_keys=True),
+        "cost_model_settings_json": json.dumps(row.cost_model_settings, sort_keys=True),
         "feature_artifact_paths_json": json.dumps(row.feature_artifact_paths, sort_keys=True),
         "downloaded_csv_paths_json": json.dumps(row.downloaded_csv_paths, sort_keys=True),
         "manifest_path": row.manifest_path,
@@ -1596,6 +1650,46 @@ def _validate_batch_inputs(*, symbol: str, windows: list[BatchWindow]) -> None:
             raise ValueError(msg)
 
 
+def _cached_public_download(
+    *,
+    start: datetime,
+    end: datetime,
+    market_data_dir: str | Path,
+    symbol: str,
+) -> PublicDownloadResult:
+    csv_paths = {
+        timeframe: str(
+            Path(market_data_dir)
+            / "bybit"
+            / "linear"
+            / symbol
+            / timeframe
+            / f"{_cache_timestamp(start)}_{_cache_timestamp(end)}.csv"
+        )
+        for timeframe in ("M15", "H1", "H4", "D1")
+    }
+    missing = [path for path in csv_paths.values() if not Path(path).exists()]
+    if missing:
+        msg = "cached public market-data CSVs are missing: " + ", ".join(missing)
+        raise FileNotFoundError(msg)
+    return PublicDownloadResult(
+        symbol=symbol,
+        requested_start=start,
+        requested_end=end,
+        csv_paths=csv_paths,
+        source_metadata={
+            "source": "bybit_public",
+            "provider": "bybit",
+            "cache_mode": "reuse_market_data",
+            "csv_paths": csv_paths,
+        },
+    )
+
+
+def _cache_timestamp(value: datetime) -> str:
+    return to_utc(value).strftime("%Y%m%dT%H%M%SZ")
+
+
 def _batch_id(
     *,
     windows: list[BatchWindow],
@@ -1612,6 +1706,7 @@ def _batch_id(
     confirmation_filter_settings: dict[str, Any] | None = None,
     exit_profile: str = "none",
     exit_profile_settings: dict[str, Any] | None = None,
+    cost_model_settings: dict[str, Any] | None = None,
     bad_regime_diagnostics_enabled: bool = False,
     forward_path_diagnostics_enabled: bool = False,
     path_risk_diagnostics_enabled: bool = False,
@@ -1634,6 +1729,7 @@ def _batch_id(
         "confirmation_filter_settings": confirmation_filter_settings or {},
         "exit_profile": exit_profile,
         "exit_profile_settings": exit_profile_settings or {},
+        "cost_model_settings": cost_model_settings or {},
         "bad_regime_diagnostics_enabled": bad_regime_diagnostics_enabled,
         "forward_path_diagnostics_enabled": forward_path_diagnostics_enabled,
         "path_risk_diagnostics_enabled": path_risk_diagnostics_enabled,
@@ -1642,6 +1738,25 @@ def _batch_id(
         "execution_timeframe": "M15",
     }
     return stable_hash(payload).split(":", maxsplit=1)[1][:16]
+
+
+def _cost_model_settings(
+    *,
+    spread: float,
+    slippage: float,
+    commission_per_unit: float,
+    funding_per_bar: float,
+    commission_rate: float,
+    funding_rate_per_bar: float,
+) -> dict[str, float]:
+    return {
+        "spread": spread,
+        "slippage_per_unit": slippage,
+        "commission_per_unit": commission_per_unit,
+        "funding_per_bar": funding_per_bar,
+        "commission_rate": commission_rate,
+        "funding_rate_per_bar": funding_rate_per_bar,
+    }
 
 
 def _format_datetime(value: datetime) -> str:
@@ -1725,9 +1840,20 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--min-net-profit", type=float, default=0.0)
     parser.add_argument("--min-profit-factor", type=float, default=1.0)
     parser.add_argument("--min-max-drawdown", type=float, default=-0.35)
+    parser.add_argument("--spread", type=float, default=0.10)
+    parser.add_argument("--slippage", type=float, default=0.02)
+    parser.add_argument("--commission-per-unit", type=float, default=0.01)
+    parser.add_argument("--funding-per-bar", type=float, default=0.0)
+    parser.add_argument("--commission-rate", type=float, default=0.0)
+    parser.add_argument("--funding-rate-per-bar", type=float, default=0.0)
     parser.add_argument("--bad-regime-diagnostics", action="store_true")
     parser.add_argument("--forward-path-diagnostics", action="store_true")
     parser.add_argument("--path-risk-diagnostics", action="store_true")
+    parser.add_argument(
+        "--reuse-market-data",
+        action="store_true",
+        help="Reuse cached Bybit CSV files from --market-data-dir instead of downloading.",
+    )
     return parser
 
 
@@ -1747,6 +1873,13 @@ def main(argv: list[str] | None = None) -> int:
         enable_bad_regime_diagnostics=args.bad_regime_diagnostics,
         enable_forward_path_diagnostics=args.forward_path_diagnostics,
         enable_path_risk_diagnostics=args.path_risk_diagnostics,
+        reuse_market_data=args.reuse_market_data,
+        spread=args.spread,
+        slippage=args.slippage,
+        commission_per_unit=args.commission_per_unit,
+        funding_per_bar=args.funding_per_bar,
+        commission_rate=args.commission_rate,
+        funding_rate_per_bar=args.funding_rate_per_bar,
         symbol=args.symbol,
         continue_on_error=not args.stop_on_error,
     )

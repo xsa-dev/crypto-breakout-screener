@@ -89,6 +89,45 @@ def test_acceptance_quality_backtest_requires_explicit_cost_assumption() -> None
         BacktestConfig(cost_model=BacktestCostModel())
 
 
+def test_zero_notional_costs_preserve_existing_per_unit_cost_behavior() -> None:
+    report = BacktestEngine(config()).run(breakout_dataset())
+
+    assert report.trades
+    for trade in report.trades:
+        expected_cost = 0.01 * trade.quantity * 2
+        expected_cost += 0.005 * trade.quantity * trade.holding_bars
+        expected_cost += 0.10 * trade.quantity
+        expected_cost += 0.02 * trade.quantity * 2
+        assert trade.total_cost == pytest.approx(expected_cost)
+
+
+def test_notional_commission_and_funding_are_included_in_trade_costs() -> None:
+    base_report = BacktestEngine(config()).run(breakout_dataset())
+    notional_config = config().model_copy(
+        update={
+            "cost_model": BacktestCostModel(
+                spread=0.10,
+                commission_per_unit=0.01,
+                slippage_per_unit=0.02,
+                funding_per_bar=0.005,
+                commission_rate=0.001,
+                funding_rate_per_bar=0.0005,
+            )
+        }
+    )
+    notional_report = BacktestEngine(notional_config).run(breakout_dataset())
+
+    base_trade = base_report.trades[0]
+    notional_trade = notional_report.trades[0]
+    expected_extra_cost = (
+        (notional_trade.entry_price + notional_trade.exit_price)
+        * notional_trade.quantity
+        * 0.001
+    ) + (notional_trade.entry_price * notional_trade.quantity * 0.0005 * notional_trade.holding_bars)
+    assert notional_trade.total_cost == pytest.approx(base_trade.total_cost + expected_extra_cost)
+    assert notional_trade.net_pnl == pytest.approx(base_trade.net_pnl - expected_extra_cost)
+
+
 def test_backtest_is_deterministic_and_uses_closed_bar_boundary() -> None:
     bars = breakout_dataset()
     engine = BacktestEngine(config())

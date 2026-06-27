@@ -390,6 +390,8 @@ class BacktestCostModel(BaseModel):
     commission_per_unit: float = Field(default=0.0, ge=0)
     slippage_per_unit: float = Field(default=0.0, ge=0)
     funding_per_bar: float = Field(default=0.0, ge=0)
+    commission_rate: float = Field(default=0.0, ge=0)
+    funding_rate_per_bar: float = 0.0
     acceptance_quality: bool = True
 
 
@@ -513,6 +515,8 @@ class BacktestConfig(BaseModel):
             and self.cost_model.commission_per_unit <= 0
             and self.cost_model.slippage_per_unit <= 0
             and self.cost_model.funding_per_bar <= 0
+            and self.cost_model.commission_rate <= 0
+            and self.cost_model.funding_rate_per_bar <= 0
         ):
             msg = "acceptance-quality backtests require explicit non-zero cost assumptions"
             raise ValueError(msg)

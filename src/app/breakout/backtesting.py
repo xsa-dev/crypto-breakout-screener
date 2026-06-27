@@ -535,8 +535,17 @@ class BacktestEngine:
         gross_pnl = (exit_price - entry_price) * quantity
         commission = costs.commission_per_unit * quantity * 2
         funding = costs.funding_per_bar * quantity * holding_bars
+        entry_notional = entry_price * quantity
+        exit_notional = exit_price * quantity
+        notional_commission = (entry_notional + exit_notional) * costs.commission_rate
+        notional_funding = entry_notional * costs.funding_rate_per_bar * holding_bars
         total_cost = (
-            commission + funding + costs.spread * quantity + costs.slippage_per_unit * quantity * 2
+            commission
+            + funding
+            + notional_commission
+            + notional_funding
+            + costs.spread * quantity
+            + costs.slippage_per_unit * quantity * 2
         )
         net_pnl = gross_pnl - total_cost
         trade_id = self._run_id(config_hash, f"{index}:{current['ts'].isoformat()}")[:16]

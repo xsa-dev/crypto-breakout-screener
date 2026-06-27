@@ -272,6 +272,8 @@ def run_crypto_experiment(
     slippage: float = 0.02,
     commission_per_unit: float = 0.01,
     funding_per_bar: float = 0.0,
+    commission_rate: float = 0.0,
+    funding_rate_per_bar: float = 0.0,
     initial_equity: float = 10_000.0,
     base_quantity: float = 10.0,
     stop_distance: float = 2.0,
@@ -320,6 +322,8 @@ def run_crypto_experiment(
             commission_per_unit=commission_per_unit,
             slippage_per_unit=slippage,
             funding_per_bar=funding_per_bar,
+            commission_rate=commission_rate,
+            funding_rate_per_bar=funding_rate_per_bar,
         ),
         research_gates=research_gates or BacktestResearchGateConfig(),
         feature_filters=feature_filters or BacktestFeatureFilterConfig(),
@@ -345,7 +349,7 @@ def run_crypto_experiment(
     engine = BacktestEngine(config, context_bars=context_bars)
     report = engine.run(bars)
     unavailable = dict(report.unavailable_reasons)
-    if funding_per_bar == 0:
+    if funding_per_bar == 0 and funding_rate_per_bar == 0:
         unavailable["funding"] = DEFAULT_LIMITATIONS["funding"]
     if context_paths:
         unavailable["context_timeframes"] = (
@@ -777,6 +781,8 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--slippage", type=float, default=0.02)
     parser.add_argument("--commission-per-unit", type=float, default=0.01)
     parser.add_argument("--funding-per-bar", type=float, default=0.0)
+    parser.add_argument("--commission-rate", type=float, default=0.0)
+    parser.add_argument("--funding-rate-per-bar", type=float, default=0.0)
     parser.add_argument("--initial-equity", type=float, default=10_000.0)
     parser.add_argument("--base-quantity", type=float, default=10.0)
     parser.add_argument("--stop-distance", type=float, default=2.0)
@@ -845,6 +851,8 @@ def main(argv: list[str] | None = None) -> int:
         slippage=args.slippage,
         commission_per_unit=args.commission_per_unit,
         funding_per_bar=args.funding_per_bar,
+        commission_rate=args.commission_rate,
+        funding_rate_per_bar=args.funding_rate_per_bar,
         initial_equity=args.initial_equity,
         base_quantity=args.base_quantity,
         stop_distance=args.stop_distance,

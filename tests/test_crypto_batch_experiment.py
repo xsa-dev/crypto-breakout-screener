@@ -369,6 +369,97 @@ def test_batch_runner_records_exit_profile(tmp_path) -> None:
     }
 
 
+def test_batch_runner_passes_and_records_cost_model_settings(tmp_path) -> None:
+    windows = [
+        BatchWindow(
+            label="costs",
+            start=datetime(2024, 1, 1, tzinfo=UTC),
+            end=datetime(2024, 1, 2, tzinfo=UTC),
+        )
+    ]
+    seen_costs: list[dict[str, float]] = []
+
+    def run_single(**kwargs: Any) -> CryptoExperimentResult:
+        seen_costs.append(
+            {
+                "spread": kwargs["spread"],
+                "slippage_per_unit": kwargs["slippage"],
+                "commission_per_unit": kwargs["commission_per_unit"],
+                "funding_per_bar": kwargs["funding_per_bar"],
+                "commission_rate": kwargs["commission_rate"],
+                "funding_rate_per_bar": kwargs["funding_rate_per_bar"],
+            }
+        )
+        return _fake_run_factory(tmp_path)(**kwargs)
+
+    expected_costs = {
+        "spread": 1.0,
+        "slippage_per_unit": 0.5,
+        "commission_per_unit": 0.0,
+        "funding_per_bar": 0.0,
+        "commission_rate": 0.00055,
+        "funding_rate_per_bar": 0.00001,
+    }
+    result = run_batch_experiment(
+        windows=windows,
+        output_dir=tmp_path / "backtests",
+        market_data_dir=tmp_path / "market-data",
+        spread=expected_costs["spread"],
+        slippage=expected_costs["slippage_per_unit"],
+        commission_per_unit=expected_costs["commission_per_unit"],
+        funding_per_bar=expected_costs["funding_per_bar"],
+        commission_rate=expected_costs["commission_rate"],
+        funding_rate_per_bar=expected_costs["funding_rate_per_bar"],
+        download=_fake_download_factory(tmp_path),
+        run_single=run_single,
+    )
+
+    row = result.summary.windows[0]
+    assert seen_costs == [expected_costs]
+    assert result.summary.cost_model_settings == expected_costs
+    assert row.cost_model_settings == expected_costs
+
+    with result.summary_csv_path.open(newline="", encoding="utf-8") as file:
+        rows = list(csv.DictReader(file))
+    assert json.loads(rows[0]["cost_model_settings_json"]) == expected_costs
+
+    summary = json.loads(result.summary_json_path.read_text(encoding="utf-8"))
+    assert summary["cost_model_settings"] == expected_costs
+    assert summary["windows"][0]["cost_model_settings"] == expected_costs
+
+
+def test_batch_runner_can_reuse_cached_market_data(tmp_path) -> None:
+    windows = [
+        BatchWindow(
+            label="cached",
+            start=datetime(2024, 1, 1, tzinfo=UTC),
+            end=datetime(2024, 1, 2, tzinfo=UTC),
+        )
+    ]
+    label = "20240101T000000Z_20240102T000000Z"
+    for timeframe in ("M15", "H1", "H4", "D1"):
+        path = tmp_path / "market-data" / "bybit" / "linear" / "BTCUSDT" / timeframe / f"{label}.csv"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("timestamp,open,high,low,close,volume,source\n", encoding="utf-8")
+
+    def download(**_: Any) -> PublicDownloadResult:
+        msg = "download should not be called when reuse_market_data is enabled"
+        raise AssertionError(msg)
+
+    result = run_batch_experiment(
+        windows=windows,
+        output_dir=tmp_path / "backtests",
+        market_data_dir=tmp_path / "market-data",
+        reuse_market_data=True,
+        download=download,
+        run_single=_fake_run_factory(tmp_path),
+    )
+
+    row = result.summary.windows[0]
+    assert row.status == "passed"
+    assert row.downloaded_csv_paths["M15"].endswith(f"M15/{label}.csv")
+
+
 
 def test_batch_runner_writes_bad_regime_diagnostics_for_failed_windows(tmp_path) -> None:
     windows = [
