@@ -25,6 +25,7 @@ from src.core.models import (
     BacktestCostModel,
     BacktestExitProfileConfig,
     BacktestFeatureFilterConfig,
+    BacktestPartialExitTargetConfig,
     BacktestResearchGateConfig,
     BreakoutStrategyConfig,
     ProductionOosThresholds,
@@ -753,6 +754,122 @@ def test_exit_profile_close_target_only_uses_closes() -> None:
     assert raw_exit_price == pytest.approx(108.1)
     assert holding_bars == 2
     assert exit_reason == "close_atr_target"
+
+
+def test_exit_profile_partial_targets_fill_and_fallback() -> None:
+    future_bars = [
+        make_bar(8, high=108.2, low=106.0, close=107.8),
+        make_bar(9, high=109.4, low=107.8, close=108.8),
+        make_bar(10, high=109.0, low=107.0, close=108.4),
+    ]
+    engine = BacktestEngine(
+        config().model_copy(
+            update={
+                "exit_profile": BacktestExitProfileConfig(
+                    fixed_holding_bars=3,
+                    partial_targets=(
+                        BacktestPartialExitTargetConfig(quantity_fraction=0.3, target_atr=1.0),
+                        BacktestPartialExitTargetConfig(quantity_fraction=0.5, target_atr=2.0),
+                    ),
+                )
+            }
+        )
+    )
+
+    legs = engine._resolve_partial_exit(
+        entry_price=107.0,
+        next_bar=future_bars[0],
+        future_bars=future_bars,
+        feature_snapshot={"feature_atr": 1.0},
+    )
+
+    assert [(leg.quantity_fraction, leg.raw_exit_price, leg.holding_bars, leg.reason) for leg in legs] == [
+        (0.3, 108.0, 1, "partial_target_intrabar"),
+        (0.5, 109.0, 2, "partial_target_intrabar"),
+        (pytest.approx(0.2), 108.4, 3, "partial_fallback_close"),
+    ]
+
+
+def test_exit_profile_partial_close_target_and_missing_atr_fallback() -> None:
+    future_bars = [
+        make_bar(8, high=108.4, low=106.0, close=107.4),
+        make_bar(9, high=109.4, low=107.8, close=108.2),
+    ]
+    engine = BacktestEngine(
+        config().model_copy(
+            update={
+                "exit_profile": BacktestExitProfileConfig(
+                    fixed_holding_bars=2,
+                    partial_targets=(
+                        BacktestPartialExitTargetConfig(
+                            quantity_fraction=0.5,
+                            target_atr=1.0,
+                            trigger="close",
+                        ),
+                    ),
+                )
+            }
+        )
+    )
+
+    legs = engine._resolve_partial_exit(
+        entry_price=107.0,
+        next_bar=future_bars[0],
+        future_bars=future_bars,
+        feature_snapshot={"feature_atr": 1.0},
+    )
+    assert [(leg.quantity_fraction, leg.raw_exit_price, leg.holding_bars, leg.reason) for leg in legs] == [
+        (0.5, 108.2, 2, "partial_target_close"),
+        (0.5, 108.2, 2, "partial_fallback_close"),
+    ]
+
+    missing_atr_legs = engine._resolve_partial_exit(
+        entry_price=107.0,
+        next_bar=future_bars[0],
+        future_bars=future_bars,
+        feature_snapshot={"feature_atr": "unavailable"},
+    )
+    assert [(leg.quantity_fraction, leg.raw_exit_price, leg.holding_bars, leg.reason) for leg in missing_atr_legs] == [
+        (1.0, 108.2, 2, "missing_entry_atr_partial_fixed_holding_close"),
+    ]
+
+
+def test_exit_profile_partial_targets_validate_fraction_and_costs() -> None:
+    with pytest.raises(ValidationError):
+        BacktestExitProfileConfig(
+            fixed_holding_bars=2,
+            partial_targets=(
+                BacktestPartialExitTargetConfig(quantity_fraction=0.5, target_atr=1.0),
+                BacktestPartialExitTargetConfig(quantity_fraction=0.5, target_atr=2.0),
+            ),
+        )
+    with pytest.raises(ValidationError):
+        BacktestExitProfileConfig(
+            fixed_holding_bars=2,
+            target_atr=1.0,
+            partial_targets=(
+                BacktestPartialExitTargetConfig(quantity_fraction=0.5, target_atr=1.0),
+            ),
+        )
+
+    engine = BacktestEngine(
+        config().model_copy(
+            update={"cost_model": BacktestCostModel(spread=0.1, slippage_per_unit=0.2)}
+        )
+    )
+    legs = engine._resolve_partial_exit(
+        entry_price=107.0,
+        next_bar=make_bar(8, high=108.0, low=106.0, close=107.5),
+        future_bars=[make_bar(8, high=108.0, low=106.0, close=107.5)],
+        feature_snapshot={"feature_atr": "unavailable"},
+    )
+    gross_pnl, total_cost = engine._partial_exit_pnl_and_costs(
+        entry_price=107.0,
+        quantity=10.0,
+        partial_legs=legs,
+    )
+    assert gross_pnl == pytest.approx((107.5 - 0.05 - 0.2 - 107.0) * 10.0)
+    assert total_cost == pytest.approx(0.1 * 10.0 + 0.2 * 10.0 * 2)
 
 
 def test_exit_profile_missing_atr_and_no_threshold_hit_fall_back_to_max_hold() -> None:

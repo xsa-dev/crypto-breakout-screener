@@ -66,6 +66,17 @@ class PendingBreakoutCandidate:
     confirmed_closes: int = 0
 
 
+@dataclass(frozen=True)
+class PartialExitLeg:
+    """Resolved quantity fraction and exit point for one partial-exit leg."""
+
+    quantity_fraction: float
+    exit_bar: Bar
+    raw_exit_price: float
+    holding_bars: int
+    reason: str
+
+
 class BacktestEngine:
     """Closed-bar deterministic replay engine with no live broker side effects."""
 
@@ -525,28 +536,42 @@ class BacktestEngine:
     ) -> BacktestTrade:
         costs = self.config.cost_model
         entry_price = current["close"] + costs.spread / 2 + costs.slippage_per_unit
-        exit_bar, raw_exit_price, holding_bars, exit_reason = self._resolve_exit(
-            entry_price=entry_price,
-            next_bar=next_bar,
-            future_bars=future_bars,
-            feature_snapshot=feature_snapshot,
-        )
-        exit_price = raw_exit_price - costs.spread / 2 - costs.slippage_per_unit
-        gross_pnl = (exit_price - entry_price) * quantity
-        commission = costs.commission_per_unit * quantity * 2
-        funding = costs.funding_per_bar * quantity * holding_bars
-        entry_notional = entry_price * quantity
-        exit_notional = exit_price * quantity
-        notional_commission = (entry_notional + exit_notional) * costs.commission_rate
-        notional_funding = entry_notional * costs.funding_rate_per_bar * holding_bars
-        total_cost = (
-            commission
-            + funding
-            + notional_commission
-            + notional_funding
-            + costs.spread * quantity
-            + costs.slippage_per_unit * quantity * 2
-        )
+        partial_legs: list[PartialExitLeg] = []
+        if self.config.exit_profile.partial_targets:
+            partial_legs = self._resolve_partial_exit(
+                entry_price=entry_price,
+                next_bar=next_bar,
+                future_bars=future_bars,
+                feature_snapshot=feature_snapshot,
+            )
+            exit_bar = max(partial_legs, key=lambda leg: leg.holding_bars).exit_bar
+            holding_bars = max(leg.holding_bars for leg in partial_legs)
+            exit_reason = "partial_exit"
+            exit_price = sum(
+                (leg.raw_exit_price - costs.spread / 2 - costs.slippage_per_unit)
+                * leg.quantity_fraction
+                for leg in partial_legs
+            )
+            gross_pnl, total_cost = self._partial_exit_pnl_and_costs(
+                entry_price=entry_price,
+                quantity=quantity,
+                partial_legs=partial_legs,
+            )
+        else:
+            exit_bar, raw_exit_price, holding_bars, exit_reason = self._resolve_exit(
+                entry_price=entry_price,
+                next_bar=next_bar,
+                future_bars=future_bars,
+                feature_snapshot=feature_snapshot,
+            )
+            exit_price = raw_exit_price - costs.spread / 2 - costs.slippage_per_unit
+            gross_pnl = (exit_price - entry_price) * quantity
+            total_cost = self._leg_cost(
+                entry_price=entry_price,
+                exit_price=exit_price,
+                quantity=quantity,
+                holding_bars=holding_bars,
+            )
         net_pnl = gross_pnl - total_cost
         trade_id = self._run_id(config_hash, f"{index}:{current['ts'].isoformat()}")[:16]
         exit_profile = self.config.exit_profile.model_dump(mode="json")
@@ -574,6 +599,17 @@ class BacktestEngine:
             exit_metadata["exit_profile_close_stop_atr"] = float(exit_profile["close_stop_atr"])
         if exit_profile["close_target_atr"] is not None:
             exit_metadata["exit_profile_close_target_atr"] = float(exit_profile["close_target_atr"])
+        if exit_profile.get("partial_targets"):
+            exit_metadata["exit_profile_partial_targets"] = json.dumps(
+                exit_profile["partial_targets"],
+                sort_keys=True,
+            )
+            exit_metadata["exit_profile_partial_filled_legs"] = sum(
+                1 for leg in partial_legs if leg.reason.startswith("partial_target")
+            )
+            exit_metadata["exit_profile_partial_fallback_fraction"] = sum(
+                leg.quantity_fraction for leg in partial_legs if leg.reason.endswith("fallback_close")
+            )
         return BacktestTrade(
             trade_id=trade_id,
             symbol=current["symbol"],
@@ -597,6 +633,123 @@ class BacktestEngine:
                 **exit_metadata,
             },
         )
+
+    def _partial_exit_pnl_and_costs(
+        self,
+        *,
+        entry_price: float,
+        quantity: float,
+        partial_legs: Sequence[PartialExitLeg],
+    ) -> tuple[float, float]:
+        gross_pnl = 0.0
+        total_cost = 0.0
+        for leg in partial_legs:
+            leg_quantity = quantity * leg.quantity_fraction
+            exit_price = leg.raw_exit_price - self.config.cost_model.spread / 2 - self.config.cost_model.slippage_per_unit
+            gross_pnl += (exit_price - entry_price) * leg_quantity
+            total_cost += self._leg_cost(
+                entry_price=entry_price,
+                exit_price=exit_price,
+                quantity=leg_quantity,
+                holding_bars=leg.holding_bars,
+            )
+        return gross_pnl, total_cost
+
+    def _leg_cost(
+        self,
+        *,
+        entry_price: float,
+        exit_price: float,
+        quantity: float,
+        holding_bars: int,
+    ) -> float:
+        costs = self.config.cost_model
+        commission = costs.commission_per_unit * quantity * 2
+        funding = costs.funding_per_bar * quantity * holding_bars
+        entry_notional = entry_price * quantity
+        exit_notional = exit_price * quantity
+        notional_commission = (entry_notional + exit_notional) * costs.commission_rate
+        notional_funding = entry_notional * costs.funding_rate_per_bar * holding_bars
+        return (
+            commission
+            + funding
+            + notional_commission
+            + notional_funding
+            + costs.spread * quantity
+            + costs.slippage_per_unit * quantity * 2
+        )
+
+    def _resolve_partial_exit(
+        self,
+        *,
+        entry_price: float,
+        next_bar: Bar,
+        future_bars: Sequence[Bar],
+        feature_snapshot: Mapping[str, float | int | str | bool],
+    ) -> list[PartialExitLeg]:
+        profile = self.config.exit_profile
+        bars = list(future_bars) or [next_bar]
+        max_index = min(profile.fixed_holding_bars, len(bars)) - 1
+        fallback_bar = bars[max_index]
+        fallback_holding = max_index + 1
+        fallback_reason = "partial_fallback_close"
+        if fallback_holding < profile.fixed_holding_bars:
+            fallback_reason = "partial_insufficient_future_bars_fallback_close"
+        atr = feature_snapshot.get("feature_atr")
+        if not isinstance(atr, int | float) or atr <= 0:
+            return [
+                PartialExitLeg(
+                    quantity_fraction=1.0,
+                    exit_bar=fallback_bar,
+                    raw_exit_price=fallback_bar["close"],
+                    holding_bars=fallback_holding,
+                    reason="missing_entry_atr_partial_fixed_holding_close",
+                )
+            ]
+        atr_value = float(atr)
+        partial_targets = profile.partial_targets or ()
+        targets = list(enumerate(partial_targets))
+        unfilled = {index for index, _target in targets}
+        legs: list[PartialExitLeg] = []
+        for offset, bar in enumerate(bars[: profile.fixed_holding_bars], start=1):
+            for target_index, target in sorted(
+                targets,
+                key=lambda item: (item[1].target_atr, item[0]),
+            ):
+                if target_index not in unfilled:
+                    continue
+                target_price = entry_price + target.target_atr * atr_value
+                if target.trigger == "intrabar":
+                    hit = bar["high"] >= target_price
+                    raw_exit_price = target_price
+                    reason = "partial_target_intrabar"
+                else:
+                    hit = bar["close"] >= target_price
+                    raw_exit_price = bar["close"]
+                    reason = "partial_target_close"
+                if hit:
+                    legs.append(
+                        PartialExitLeg(
+                            quantity_fraction=target.quantity_fraction,
+                            exit_bar=bar,
+                            raw_exit_price=raw_exit_price,
+                            holding_bars=offset,
+                            reason=reason,
+                        )
+                    )
+                    unfilled.remove(target_index)
+        fallback_fraction = 1.0 - sum(leg.quantity_fraction for leg in legs)
+        if fallback_fraction > 1e-12:
+            legs.append(
+                PartialExitLeg(
+                    quantity_fraction=fallback_fraction,
+                    exit_bar=fallback_bar,
+                    raw_exit_price=fallback_bar["close"],
+                    holding_bars=fallback_holding,
+                    reason=fallback_reason,
+                )
+            )
+        return legs
 
     def _resolve_exit(
         self,

@@ -407,6 +407,17 @@ def test_batch_runner_records_exit_profile(tmp_path) -> None:
         "close_target_atr": 1.0,
     }
 
+    partial_profile = (
+        "conservative-v1-m15-slope-positive-max-trades-8-partial-30-50-targets-1p0-2p0-hold-16"
+    )
+    assert exit_profile_config(partial_profile).model_dump(mode="json", exclude_none=True) == {
+        "fixed_holding_bars": 16,
+        "partial_targets": [
+            {"quantity_fraction": 0.3, "target_atr": 1.0, "trigger": "intrabar"},
+            {"quantity_fraction": 0.5, "target_atr": 2.0, "trigger": "intrabar"},
+        ],
+    }
+
     close_stop_profile = "conservative-v1-m15-slope-positive-max-trades-8-close-stop-0p5-close-target-2p0-hold-16"
     assert exit_profile_config(close_stop_profile).model_dump(mode="json", exclude_none=True) == {
         "fixed_holding_bars": 16,

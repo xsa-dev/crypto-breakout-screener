@@ -465,6 +465,14 @@ class BacktestConfirmationFilterConfig(BaseModel):
         return self
 
 
+class BacktestPartialExitTargetConfig(BaseModel):
+    """One deterministic partial-exit target leg for local research backtests."""
+
+    quantity_fraction: float = Field(gt=0, lt=1)
+    target_atr: float = Field(gt=0)
+    trigger: Literal["intrabar", "close"] = "intrabar"
+
+
 class BacktestExitProfileConfig(BaseModel):
     """Disabled-by-default local research exit profiles."""
 
@@ -476,6 +484,7 @@ class BacktestExitProfileConfig(BaseModel):
     trailing_giveback_atr: float | None = Field(default=None, gt=0)
     close_stop_atr: float | None = Field(default=None, gt=0)
     close_target_atr: float | None = Field(default=None, gt=0)
+    partial_targets: tuple[BacktestPartialExitTargetConfig, ...] | None = None
 
     @property
     def configured(self) -> bool:
@@ -488,6 +497,7 @@ class BacktestExitProfileConfig(BaseModel):
             or self.trailing_giveback_atr is not None
             or self.close_stop_atr is not None
             or self.close_target_atr is not None
+            or bool(self.partial_targets)
         )
 
     @model_validator(mode="after")
@@ -498,6 +508,25 @@ class BacktestExitProfileConfig(BaseModel):
         if (self.trailing_after_atr is None) != (self.trailing_giveback_atr is None):
             msg = "trailing_after_atr and trailing_giveback_atr must be configured together"
             raise ValueError(msg)
+        if self.partial_targets:
+            partial_fraction = sum(target.quantity_fraction for target in self.partial_targets)
+            if partial_fraction >= 1.0:
+                msg = "partial target quantity fractions must leave a positive fallback runner"
+                raise ValueError(msg)
+            if any(
+                value is not None
+                for value in (
+                    self.stop_atr,
+                    self.target_atr,
+                    self.breakeven_after_atr,
+                    self.trailing_after_atr,
+                    self.trailing_giveback_atr,
+                    self.close_stop_atr,
+                    self.close_target_atr,
+                )
+            ):
+                msg = "partial targets cannot be combined with other exit thresholds"
+                raise ValueError(msg)
         return self
 
 
