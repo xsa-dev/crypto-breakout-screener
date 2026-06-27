@@ -492,8 +492,8 @@ class BacktestExitProfileConfig(BaseModel):
 
     @model_validator(mode="after")
     def validate_exit_profile(self) -> "BacktestExitProfileConfig":
-        if (self.stop_atr is None) != (self.target_atr is None):
-            msg = "stop_atr and target_atr must be configured together"
+        if self.stop_atr is not None and self.target_atr is None:
+            msg = "stop_atr requires target_atr"
             raise ValueError(msg)
         if (self.trailing_after_atr is None) != (self.trailing_giveback_atr is None):
             msg = "trailing_after_atr and trailing_giveback_atr must be configured together"

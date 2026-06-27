@@ -695,6 +695,66 @@ def test_exit_profile_uses_conservative_same_bar_stop_first() -> None:
     assert report.trades[0].net_pnl < 0
 
 
+def test_exit_profile_target_only_does_not_require_stop() -> None:
+    future_bars = [
+        make_bar(8, high=107.4, low=100.0, close=106.8),
+        make_bar(9, high=108.2, low=106.9, close=107.9),
+        make_bar(10, high=108.5, low=107.0, close=108.1),
+    ]
+    engine = BacktestEngine(
+        config().model_copy(
+            update={
+                "exit_profile": BacktestExitProfileConfig(
+                    fixed_holding_bars=3,
+                    target_atr=1.0,
+                )
+            }
+        )
+    )
+
+    exit_bar, raw_exit_price, holding_bars, exit_reason = engine._resolve_exit(
+        entry_price=107.0,
+        next_bar=future_bars[0],
+        future_bars=future_bars,
+        feature_snapshot={"feature_atr": 1.0},
+    )
+
+    assert exit_bar == future_bars[1]
+    assert raw_exit_price == pytest.approx(108.0)
+    assert holding_bars == 2
+    assert exit_reason == "atr_target"
+
+
+def test_exit_profile_close_target_only_uses_closes() -> None:
+    future_bars = [
+        make_bar(8, high=108.4, low=106.0, close=107.4),
+        make_bar(9, high=108.5, low=106.8, close=108.1),
+        make_bar(10, high=109.0, low=107.0, close=108.4),
+    ]
+    engine = BacktestEngine(
+        config().model_copy(
+            update={
+                "exit_profile": BacktestExitProfileConfig(
+                    fixed_holding_bars=3,
+                    close_target_atr=1.0,
+                )
+            }
+        )
+    )
+
+    exit_bar, raw_exit_price, holding_bars, exit_reason = engine._resolve_exit(
+        entry_price=107.0,
+        next_bar=future_bars[0],
+        future_bars=future_bars,
+        feature_snapshot={"feature_atr": 1.0},
+    )
+
+    assert exit_bar == future_bars[1]
+    assert raw_exit_price == pytest.approx(108.1)
+    assert holding_bars == 2
+    assert exit_reason == "close_atr_target"
+
+
 def test_exit_profile_missing_atr_and_no_threshold_hit_fall_back_to_max_hold() -> None:
     future_bars = [
         make_bar(8, high=107.2, low=106.8, close=107.0),
