@@ -252,6 +252,9 @@ EXIT_PROFILE_NAMES = {
     "conservative-v1-m15-slope-positive-max-trades-8-partial-50-target-1p0-hold-16",
     "conservative-v1-m15-slope-positive-max-trades-8-partial-30-50-targets-1p0-2p0-hold-16",
     "conservative-v1-m15-slope-positive-max-trades-8-partial-50-close-target-1p0-hold-16",
+    "conservative-v1-m15-slope-positive-max-trades-8-partial-50-target-1p0-residual-breakeven-hold-16",
+    "conservative-v1-m15-slope-positive-max-trades-8-partial-30-50-targets-1p0-2p0-residual-breakeven-hold-16",
+    "conservative-v1-m15-slope-positive-max-trades-8-partial-50-target-1p0-residual-trail-1p0-giveback-1p0-hold-16",
     "conservative-v1-m15-slope-positive-max-trades-8-atr-stop-0p01-target-2p0",
     "conservative-v1-m15-slope-positive-max-trades-8-atr-stop-0p25-target-2p0-hold-8",
     "conservative-v1-m15-slope-positive-max-trades-8-atr-stop-0p5-target-2p0-hold-8",
@@ -524,6 +527,31 @@ def exit_profile_config(name: str) -> BacktestExitProfileConfig:
                     trigger="close",
                 ),
             ),
+        )
+    if name == "conservative-v1-m15-slope-positive-max-trades-8-partial-50-target-1p0-residual-breakeven-hold-16":
+        return BacktestExitProfileConfig(
+            fixed_holding_bars=16,
+            partial_targets=(
+                BacktestPartialExitTargetConfig(quantity_fraction=0.5, target_atr=1.0),
+            ),
+            partial_residual_breakeven=True,
+        )
+    if name == "conservative-v1-m15-slope-positive-max-trades-8-partial-30-50-targets-1p0-2p0-residual-breakeven-hold-16":
+        return BacktestExitProfileConfig(
+            fixed_holding_bars=16,
+            partial_targets=(
+                BacktestPartialExitTargetConfig(quantity_fraction=0.3, target_atr=1.0),
+                BacktestPartialExitTargetConfig(quantity_fraction=0.5, target_atr=2.0),
+            ),
+            partial_residual_breakeven=True,
+        )
+    if name == "conservative-v1-m15-slope-positive-max-trades-8-partial-50-target-1p0-residual-trail-1p0-giveback-1p0-hold-16":
+        return BacktestExitProfileConfig(
+            fixed_holding_bars=16,
+            partial_targets=(
+                BacktestPartialExitTargetConfig(quantity_fraction=0.5, target_atr=1.0),
+            ),
+            partial_residual_trailing_giveback_atr=1.0,
         )
     if name == "conservative-v1-m15-slope-positive-max-trades-8-atr-stop-0p01-target-2p0":
         return BacktestExitProfileConfig(fixed_holding_bars=1, stop_atr=0.01, target_atr=2.0)

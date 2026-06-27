@@ -604,6 +604,13 @@ class BacktestEngine:
                 exit_profile["partial_targets"],
                 sort_keys=True,
             )
+            if exit_profile["partial_residual_breakeven"]:
+                exit_metadata["exit_profile_residual_protection"] = "breakeven"
+            if exit_profile["partial_residual_trailing_giveback_atr"] is not None:
+                exit_metadata["exit_profile_residual_protection"] = "trailing"
+                exit_metadata["exit_profile_partial_residual_trailing_giveback_atr"] = float(
+                    exit_profile["partial_residual_trailing_giveback_atr"]
+                )
             exit_metadata["exit_profile_partial_filled_legs"] = sum(
                 1 for leg in partial_legs if leg.reason.startswith("partial_target")
             )
@@ -711,6 +718,8 @@ class BacktestEngine:
         targets = list(enumerate(partial_targets))
         unfilled = {index for index, _target in targets}
         legs: list[PartialExitLeg] = []
+        residual_protection_active = False
+        trailing_high: float | None = None
         for offset, bar in enumerate(bars[: profile.fixed_holding_bars], start=1):
             for target_index, target in sorted(
                 targets,
@@ -737,7 +746,44 @@ class BacktestEngine:
                             reason=reason,
                         )
                     )
+                    residual_protection_active = True
+                    trailing_high = bar["high"] if trailing_high is None else max(trailing_high, bar["high"])
                     unfilled.remove(target_index)
+
+            if not residual_protection_active:
+                continue
+
+            fallback_fraction = 1.0 - sum(leg.quantity_fraction for leg in legs)
+            if fallback_fraction <= 1e-12:
+                return legs
+
+            if profile.partial_residual_breakeven and bar["low"] <= entry_price:
+                legs.append(
+                    PartialExitLeg(
+                        quantity_fraction=fallback_fraction,
+                        exit_bar=bar,
+                        raw_exit_price=entry_price,
+                        holding_bars=offset,
+                        reason="partial_residual_breakeven_exit",
+                    )
+                )
+                return legs
+
+            if profile.partial_residual_trailing_giveback_atr is not None:
+                trailing_high = bar["high"] if trailing_high is None else max(trailing_high, bar["high"])
+                trailing_price = trailing_high - profile.partial_residual_trailing_giveback_atr * atr_value
+                if bar["low"] <= trailing_price:
+                    legs.append(
+                        PartialExitLeg(
+                            quantity_fraction=fallback_fraction,
+                            exit_bar=bar,
+                            raw_exit_price=trailing_price,
+                            holding_bars=offset,
+                            reason="partial_residual_trailing_exit",
+                        )
+                    )
+                    return legs
+
         fallback_fraction = 1.0 - sum(leg.quantity_fraction for leg in legs)
         if fallback_fraction > 1e-12:
             legs.append(

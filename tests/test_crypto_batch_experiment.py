@@ -418,6 +418,34 @@ def test_batch_runner_records_exit_profile(tmp_path) -> None:
         ],
     }
 
+    protected_partial_profile = (
+        "conservative-v1-m15-slope-positive-max-trades-8-"
+        "partial-50-target-1p0-residual-breakeven-hold-16"
+    )
+    assert exit_profile_config(protected_partial_profile).model_dump(
+        mode="json", exclude_none=True
+    ) == {
+        "fixed_holding_bars": 16,
+        "partial_targets": [
+            {"quantity_fraction": 0.5, "target_atr": 1.0, "trigger": "intrabar"},
+        ],
+        "partial_residual_breakeven": True,
+    }
+
+    protected_trailing_profile = (
+        "conservative-v1-m15-slope-positive-max-trades-8-"
+        "partial-50-target-1p0-residual-trail-1p0-giveback-1p0-hold-16"
+    )
+    assert exit_profile_config(protected_trailing_profile).model_dump(
+        mode="json", exclude_none=True
+    ) == {
+        "fixed_holding_bars": 16,
+        "partial_targets": [
+            {"quantity_fraction": 0.5, "target_atr": 1.0, "trigger": "intrabar"},
+        ],
+        "partial_residual_trailing_giveback_atr": 1.0,
+    }
+
     close_stop_profile = "conservative-v1-m15-slope-positive-max-trades-8-close-stop-0p5-close-target-2p0-hold-16"
     assert exit_profile_config(close_stop_profile).model_dump(mode="json", exclude_none=True) == {
         "fixed_holding_bars": 16,

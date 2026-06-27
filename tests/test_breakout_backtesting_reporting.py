@@ -851,6 +851,16 @@ def test_exit_profile_partial_targets_validate_fraction_and_costs() -> None:
                 BacktestPartialExitTargetConfig(quantity_fraction=0.5, target_atr=1.0),
             ),
         )
+    with pytest.raises(ValidationError):
+        BacktestExitProfileConfig(partial_residual_breakeven=True)
+    with pytest.raises(ValidationError):
+        BacktestExitProfileConfig(
+            partial_targets=(
+                BacktestPartialExitTargetConfig(quantity_fraction=0.5, target_atr=1.0),
+            ),
+            partial_residual_breakeven=True,
+            partial_residual_trailing_giveback_atr=1.0,
+        )
 
     engine = BacktestEngine(
         config().model_copy(
@@ -870,6 +880,105 @@ def test_exit_profile_partial_targets_validate_fraction_and_costs() -> None:
     )
     assert gross_pnl == pytest.approx((107.5 - 0.05 - 0.2 - 107.0) * 10.0)
     assert total_cost == pytest.approx(0.1 * 10.0 + 0.2 * 10.0 * 2)
+
+
+def test_exit_profile_partial_residual_breakeven_after_target_fill() -> None:
+    future_bars = [
+        make_bar(8, high=108.2, low=107.4, close=107.8),
+        make_bar(9, high=107.6, low=106.8, close=107.2),
+        make_bar(10, high=109.0, low=107.0, close=108.4),
+    ]
+    engine = BacktestEngine(
+        config().model_copy(
+            update={
+                "exit_profile": BacktestExitProfileConfig(
+                    fixed_holding_bars=3,
+                    partial_targets=(
+                        BacktestPartialExitTargetConfig(quantity_fraction=0.5, target_atr=1.0),
+                    ),
+                    partial_residual_breakeven=True,
+                )
+            }
+        )
+    )
+
+    legs = engine._resolve_partial_exit(
+        entry_price=107.0,
+        next_bar=future_bars[0],
+        future_bars=future_bars,
+        feature_snapshot={"feature_atr": 1.0},
+    )
+
+    assert [(leg.quantity_fraction, leg.raw_exit_price, leg.holding_bars, leg.reason) for leg in legs] == [
+        (0.5, 108.0, 1, "partial_target_intrabar"),
+        (0.5, 107.0, 2, "partial_residual_breakeven_exit"),
+    ]
+
+
+def test_exit_profile_partial_residual_protection_waits_for_partial_fill() -> None:
+    future_bars = [
+        make_bar(8, high=107.4, low=106.0, close=107.1),
+        make_bar(9, high=108.2, low=107.4, close=107.8),
+        make_bar(10, high=108.0, low=106.8, close=107.2),
+    ]
+    engine = BacktestEngine(
+        config().model_copy(
+            update={
+                "exit_profile": BacktestExitProfileConfig(
+                    fixed_holding_bars=3,
+                    partial_targets=(
+                        BacktestPartialExitTargetConfig(quantity_fraction=0.5, target_atr=1.0),
+                    ),
+                    partial_residual_breakeven=True,
+                )
+            }
+        )
+    )
+
+    legs = engine._resolve_partial_exit(
+        entry_price=107.0,
+        next_bar=future_bars[0],
+        future_bars=future_bars,
+        feature_snapshot={"feature_atr": 1.0},
+    )
+
+    assert [(leg.quantity_fraction, leg.raw_exit_price, leg.holding_bars, leg.reason) for leg in legs] == [
+        (0.5, 108.0, 2, "partial_target_intrabar"),
+        (0.5, 107.0, 3, "partial_residual_breakeven_exit"),
+    ]
+
+
+def test_exit_profile_partial_residual_trailing_after_target_fill() -> None:
+    future_bars = [
+        make_bar(8, high=108.2, low=107.4, close=107.8),
+        make_bar(9, high=109.4, low=108.8, close=109.0),
+        make_bar(10, high=109.2, low=108.2, close=108.5),
+    ]
+    engine = BacktestEngine(
+        config().model_copy(
+            update={
+                "exit_profile": BacktestExitProfileConfig(
+                    fixed_holding_bars=3,
+                    partial_targets=(
+                        BacktestPartialExitTargetConfig(quantity_fraction=0.5, target_atr=1.0),
+                    ),
+                    partial_residual_trailing_giveback_atr=1.0,
+                )
+            }
+        )
+    )
+
+    legs = engine._resolve_partial_exit(
+        entry_price=107.0,
+        next_bar=future_bars[0],
+        future_bars=future_bars,
+        feature_snapshot={"feature_atr": 1.0},
+    )
+
+    assert [(leg.quantity_fraction, leg.raw_exit_price, leg.holding_bars, leg.reason) for leg in legs] == [
+        (0.5, 108.0, 1, "partial_target_intrabar"),
+        (0.5, 108.4, 3, "partial_residual_trailing_exit"),
+    ]
 
 
 def test_exit_profile_missing_atr_and_no_threshold_hit_fall_back_to_max_hold() -> None:

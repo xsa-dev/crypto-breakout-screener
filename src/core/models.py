@@ -485,6 +485,8 @@ class BacktestExitProfileConfig(BaseModel):
     close_stop_atr: float | None = Field(default=None, gt=0)
     close_target_atr: float | None = Field(default=None, gt=0)
     partial_targets: tuple[BacktestPartialExitTargetConfig, ...] | None = None
+    partial_residual_breakeven: bool | None = None
+    partial_residual_trailing_giveback_atr: float | None = Field(default=None, gt=0)
 
     @property
     def configured(self) -> bool:
@@ -498,6 +500,8 @@ class BacktestExitProfileConfig(BaseModel):
             or self.close_stop_atr is not None
             or self.close_target_atr is not None
             or bool(self.partial_targets)
+            or self.partial_residual_breakeven
+            or self.partial_residual_trailing_giveback_atr is not None
         )
 
     @model_validator(mode="after")
@@ -527,6 +531,12 @@ class BacktestExitProfileConfig(BaseModel):
             ):
                 msg = "partial targets cannot be combined with other exit thresholds"
                 raise ValueError(msg)
+            if self.partial_residual_breakeven and self.partial_residual_trailing_giveback_atr is not None:
+                msg = "partial residual breakeven and trailing protection are mutually exclusive"
+                raise ValueError(msg)
+        elif self.partial_residual_breakeven or self.partial_residual_trailing_giveback_atr is not None:
+            msg = "partial residual protection requires partial_targets"
+            raise ValueError(msg)
         return self
 
 
