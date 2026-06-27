@@ -244,6 +244,9 @@ QUARTERLY_2023_2024_WINDOWS = (
 EXIT_PROFILE_NAMES = {
     "conservative-v1-m15-slope-positive-max-trades-8-hold-2",
     "conservative-v1-m15-slope-positive-max-trades-8-hold-4",
+    "conservative-v1-m15-slope-positive-max-trades-8-hold-8",
+    "conservative-v1-m15-slope-positive-max-trades-8-hold-16",
+    "conservative-v1-m15-slope-positive-max-trades-8-hold-32",
     "conservative-v1-m15-slope-positive-max-trades-8-atr-stop-0p01-target-2p0",
     "conservative-v1-m15-slope-positive-max-trades-8-atr-stop-1p0-target-1p5",
     "conservative-v1-m15-slope-positive-max-trades-8-atr-stop-1p5-target-2p0",
@@ -471,6 +474,12 @@ def exit_profile_config(name: str) -> BacktestExitProfileConfig:
         return BacktestExitProfileConfig(fixed_holding_bars=2)
     if name == "conservative-v1-m15-slope-positive-max-trades-8-hold-4":
         return BacktestExitProfileConfig(fixed_holding_bars=4)
+    if name == "conservative-v1-m15-slope-positive-max-trades-8-hold-8":
+        return BacktestExitProfileConfig(fixed_holding_bars=8)
+    if name == "conservative-v1-m15-slope-positive-max-trades-8-hold-16":
+        return BacktestExitProfileConfig(fixed_holding_bars=16)
+    if name == "conservative-v1-m15-slope-positive-max-trades-8-hold-32":
+        return BacktestExitProfileConfig(fixed_holding_bars=32)
     if name == "conservative-v1-m15-slope-positive-max-trades-8-atr-stop-0p01-target-2p0":
         return BacktestExitProfileConfig(fixed_holding_bars=1, stop_atr=0.01, target_atr=2.0)
     if name == "conservative-v1-m15-slope-positive-max-trades-8-atr-stop-1p0-target-1p5":

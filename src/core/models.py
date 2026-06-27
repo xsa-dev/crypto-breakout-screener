@@ -468,7 +468,7 @@ class BacktestConfirmationFilterConfig(BaseModel):
 class BacktestExitProfileConfig(BaseModel):
     """Disabled-by-default local research exit profiles."""
 
-    fixed_holding_bars: int = Field(default=1, ge=1, le=16)
+    fixed_holding_bars: int = Field(default=1, ge=1, le=32)
     stop_atr: float | None = Field(default=None, gt=0)
     target_atr: float | None = Field(default=None, gt=0)
     breakeven_after_atr: float | None = Field(default=None, gt=0)

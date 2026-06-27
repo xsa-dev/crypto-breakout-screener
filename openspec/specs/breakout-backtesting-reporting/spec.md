@@ -521,6 +521,11 @@ The BTCUSDT batch research runner SHALL support disabled-by-default, fixed, name
 - **THEN** already-accepted trades exit at the configured future M15 bar close or the last available post-entry bar when the configured horizon is unavailable
 - **AND** the profile does not affect level detection, setup scoring, gates, feature filters, confirmation filters, risk sizing, or entry selection.
 
+#### Scenario: Extended holding profile is selected
+- **WHEN** a supported extended holding exit profile for `8`, `16`, or `32` M15 bars is selected
+- **THEN** the runner applies only the named fixed holding horizon while preserving reference entry selection, lifecycle gates, M15 slope feature filter, max-trades risk control, confirmation filters, and configured research thresholds
+- **AND** the profile remains disabled unless selected by its explicit name.
+
 #### Scenario: Fixed ATR stop/target profile is selected
 - **WHEN** a supported ATR stop/target exit profile is selected
 - **THEN** already-accepted long trades evaluate fixed adverse stop and favorable target thresholds from entry price using entry-time ATR
@@ -553,6 +558,12 @@ BTCUSDT batch summaries SHALL expose exit-profile comparison results separately 
 - **THEN** the report states pass/fail status for `2023q1`, `2023q2`, `2023q3`, `2023q4`, `2024q1`, `2024q2`, `2024q3`, and `2024q4`
 - **AND** remaining failed windows list blockers
 - **AND** the report states whether any exit profile reached `8/8` after realistic costs, moved the score toward `8/8`, or failed to support the hypothesis.
+
+#### Scenario: Extended holding profile is evaluated against realistic costs
+- **WHEN** an extended holding profile is evaluated for the BTCUSDT quarterly 2023q1..2024q4 scorecard
+- **THEN** success requires all eight quarters to pass after realistic costs with unchanged thresholds
+- **AND** baseline-only pass counts are recorded as insufficient unless the realistic-cost scorecard also reaches `8/8`
+- **AND** a below-`8/8` result is archived as falsified research evidence with scorecard artifacts and no success notification
 
 ### Requirement: Realistic-cost breakout profile search uses fixed eight-quarter gates
 The BTCUSDT breakout research runner SHALL evaluate robust profile-search candidates against exactly the eight quarterly windows `2023q1`, `2023q2`, `2023q3`, `2023q4`, `2024q1`, `2024q2`, `2024q3`, and `2024q4`, using unchanged research thresholds: `min_trade_count=1`, `min_net_profit=0.0`, `min_profit_factor=1.0`, `min_max_drawdown=-0.35`, and `require_no_feed_gaps=true`.

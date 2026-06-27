@@ -375,6 +375,11 @@ def test_batch_runner_records_exit_profile(tmp_path) -> None:
         "trailing_giveback_atr": 0.5,
     }
 
+    extended_hold_profile = "conservative-v1-m15-slope-positive-max-trades-8-hold-32"
+    assert exit_profile_config(extended_hold_profile).model_dump(mode="json", exclude_none=True) == {
+        "fixed_holding_bars": 32,
+    }
+
 
 def test_batch_runner_passes_and_records_cost_model_settings(tmp_path) -> None:
     windows = [
