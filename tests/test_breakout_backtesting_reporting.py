@@ -798,6 +798,80 @@ def test_exit_profile_close_target_only_uses_closes() -> None:
     assert exit_reason == "close_atr_target"
 
 
+def test_exit_profile_delayed_close_stop_waits_for_grace_bars() -> None:
+    future_bars = [
+        make_bar(8, high=107.2, low=104.8, close=105.5),
+        make_bar(9, high=107.4, low=104.6, close=105.4),
+        make_bar(10, high=107.3, low=104.5, close=105.3),
+        make_bar(11, high=107.1, low=104.4, close=105.2),
+        make_bar(12, high=107.0, low=104.3, close=105.1),
+    ]
+    engine = BacktestEngine(
+        config().model_copy(
+            update={
+                "exit_profile": BacktestExitProfileConfig(
+                    fixed_holding_bars=5,
+                    close_stop_atr=1.0,
+                    close_stop_after_bars=4,
+                )
+            }
+        )
+    )
+
+    exit_bar, raw_exit_price, holding_bars, exit_reason = engine._resolve_exit(
+        entry_price=107.0,
+        next_bar=future_bars[0],
+        future_bars=future_bars,
+        feature_snapshot={"feature_atr": 1.0},
+    )
+
+    assert exit_bar == future_bars[4]
+    assert raw_exit_price == pytest.approx(105.1)
+    assert holding_bars == 5
+    assert exit_reason == "close_atr_stop"
+
+
+def test_exit_profile_immediate_close_stop_default_is_preserved() -> None:
+    future_bars = [
+        make_bar(8, high=107.2, low=104.8, close=105.5),
+        make_bar(9, high=107.4, low=104.6, close=105.4),
+    ]
+    engine = BacktestEngine(
+        config().model_copy(
+            update={
+                "exit_profile": BacktestExitProfileConfig(
+                    fixed_holding_bars=2,
+                    close_stop_atr=1.0,
+                )
+            }
+        )
+    )
+
+    exit_bar, raw_exit_price, holding_bars, exit_reason = engine._resolve_exit(
+        entry_price=107.0,
+        next_bar=future_bars[0],
+        future_bars=future_bars,
+        feature_snapshot={"feature_atr": 1.0},
+    )
+
+    assert exit_bar == future_bars[0]
+    assert raw_exit_price == pytest.approx(105.5)
+    assert holding_bars == 1
+    assert exit_reason == "close_atr_stop"
+
+
+def test_exit_profile_delayed_close_stop_requires_close_stop_threshold() -> None:
+    with pytest.raises(ValidationError):
+        BacktestExitProfileConfig(fixed_holding_bars=8, close_stop_after_bars=4)
+
+    with pytest.raises(ValidationError):
+        BacktestExitProfileConfig(
+            fixed_holding_bars=4,
+            close_stop_atr=1.0,
+            close_stop_after_bars=4,
+        )
+
+
 def test_exit_profile_partial_targets_fill_and_fallback() -> None:
     future_bars = [
         make_bar(8, high=108.2, low=106.0, close=107.8),

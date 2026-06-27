@@ -601,6 +601,10 @@ class BacktestEngine:
             )
         if exit_profile["close_stop_atr"] is not None:
             exit_metadata["exit_profile_close_stop_atr"] = float(exit_profile["close_stop_atr"])
+            if exit_profile["close_stop_after_bars"] is not None:
+                exit_metadata["exit_profile_close_stop_after_bars"] = int(
+                    exit_profile["close_stop_after_bars"]
+                )
         if exit_profile["close_target_atr"] is not None:
             exit_metadata["exit_profile_close_target_atr"] = float(exit_profile["close_target_atr"])
         if exit_profile.get("partial_targets"):
@@ -863,7 +867,11 @@ class BacktestEngine:
         for offset, bar in enumerate(bars[: profile.fixed_holding_bars], start=1):
             if stop_price is not None and bar["low"] <= stop_price:
                 return bar, stop_price, offset, "atr_stop"
-            if close_stop_price is not None and bar["close"] <= close_stop_price:
+            if (
+                close_stop_price is not None
+                and offset > (profile.close_stop_after_bars or 0)
+                and bar["close"] <= close_stop_price
+            ):
                 return bar, bar["close"], offset, "close_atr_stop"
             if breakeven_active and bar["low"] <= entry_price:
                 return bar, entry_price, offset, "breakeven_exit"

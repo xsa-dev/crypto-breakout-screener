@@ -485,6 +485,7 @@ class BacktestExitProfileConfig(BaseModel):
     trailing_after_atr: float | None = Field(default=None, gt=0)
     trailing_giveback_atr: float | None = Field(default=None, gt=0)
     close_stop_atr: float | None = Field(default=None, gt=0)
+    close_stop_after_bars: int | None = Field(default=None, ge=0, le=32)
     close_target_atr: float | None = Field(default=None, gt=0)
     partial_targets: tuple[BacktestPartialExitTargetConfig, ...] | None = None
     partial_residual_breakeven: bool | None = None
@@ -500,6 +501,7 @@ class BacktestExitProfileConfig(BaseModel):
             or self.trailing_after_atr is not None
             or self.trailing_giveback_atr is not None
             or self.close_stop_atr is not None
+            or self.close_stop_after_bars is not None
             or self.close_target_atr is not None
             or bool(self.partial_targets)
             or self.partial_residual_breakeven
@@ -513,6 +515,12 @@ class BacktestExitProfileConfig(BaseModel):
             raise ValueError(msg)
         if (self.trailing_after_atr is None) != (self.trailing_giveback_atr is None):
             msg = "trailing_after_atr and trailing_giveback_atr must be configured together"
+            raise ValueError(msg)
+        if self.close_stop_after_bars is not None and self.close_stop_atr is None:
+            msg = "close_stop_after_bars requires close_stop_atr"
+            raise ValueError(msg)
+        if self.close_stop_after_bars is not None and self.close_stop_after_bars >= self.fixed_holding_bars:
+            msg = "close_stop_after_bars must be below fixed_holding_bars"
             raise ValueError(msg)
         if self.partial_targets:
             partial_fraction = sum(target.quantity_fraction for target in self.partial_targets)
