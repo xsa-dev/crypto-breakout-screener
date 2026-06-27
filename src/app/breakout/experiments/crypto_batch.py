@@ -248,6 +248,9 @@ EXIT_PROFILE_NAMES = {
     "conservative-v1-m15-slope-positive-max-trades-8-hold-16",
     "conservative-v1-m15-slope-positive-max-trades-8-hold-32",
     "conservative-v1-m15-slope-positive-max-trades-8-atr-stop-0p01-target-2p0",
+    "conservative-v1-m15-slope-positive-max-trades-8-atr-stop-0p25-target-2p0-hold-8",
+    "conservative-v1-m15-slope-positive-max-trades-8-atr-stop-0p5-target-2p0-hold-8",
+    "conservative-v1-m15-slope-positive-max-trades-8-atr-stop-0p75-target-2p5-hold-16",
     "conservative-v1-m15-slope-positive-max-trades-8-atr-stop-1p0-target-1p5",
     "conservative-v1-m15-slope-positive-max-trades-8-atr-stop-1p5-target-2p0",
     "conservative-v1-m15-slope-positive-max-trades-8-breakeven-1p0-hold-8",
@@ -482,6 +485,12 @@ def exit_profile_config(name: str) -> BacktestExitProfileConfig:
         return BacktestExitProfileConfig(fixed_holding_bars=32)
     if name == "conservative-v1-m15-slope-positive-max-trades-8-atr-stop-0p01-target-2p0":
         return BacktestExitProfileConfig(fixed_holding_bars=1, stop_atr=0.01, target_atr=2.0)
+    if name == "conservative-v1-m15-slope-positive-max-trades-8-atr-stop-0p25-target-2p0-hold-8":
+        return BacktestExitProfileConfig(fixed_holding_bars=8, stop_atr=0.25, target_atr=2.0)
+    if name == "conservative-v1-m15-slope-positive-max-trades-8-atr-stop-0p5-target-2p0-hold-8":
+        return BacktestExitProfileConfig(fixed_holding_bars=8, stop_atr=0.5, target_atr=2.0)
+    if name == "conservative-v1-m15-slope-positive-max-trades-8-atr-stop-0p75-target-2p5-hold-16":
+        return BacktestExitProfileConfig(fixed_holding_bars=16, stop_atr=0.75, target_atr=2.5)
     if name == "conservative-v1-m15-slope-positive-max-trades-8-atr-stop-1p0-target-1p5":
         return BacktestExitProfileConfig(fixed_holding_bars=4, stop_atr=1.0, target_atr=1.5)
     if name == "conservative-v1-m15-slope-positive-max-trades-8-atr-stop-1p5-target-2p0":

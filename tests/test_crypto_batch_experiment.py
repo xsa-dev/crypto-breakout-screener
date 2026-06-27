@@ -368,6 +368,17 @@ def test_batch_runner_records_exit_profile(tmp_path) -> None:
         "target_atr": 2.0,
     }
 
+    asymmetric_stop_profile = (
+        "conservative-v1-m15-slope-positive-max-trades-8-atr-stop-0p25-target-2p0-hold-8"
+    )
+    assert exit_profile_config(asymmetric_stop_profile).model_dump(
+        mode="json", exclude_none=True
+    ) == {
+        "fixed_holding_bars": 8,
+        "stop_atr": 0.25,
+        "target_atr": 2.0,
+    }
+
     trailing_profile = "conservative-v1-m15-slope-positive-max-trades-8-trail-1p0-giveback-0p5-hold-8"
     assert exit_profile_config(trailing_profile).model_dump(mode="json", exclude_none=True) == {
         "fixed_holding_bars": 8,
