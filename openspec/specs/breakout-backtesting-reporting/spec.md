@@ -509,23 +509,22 @@ Path-risk diagnostic artifacts SHALL include enough fields to compare favorable 
 - **AND** the labels are computed only from bars inside the configured horizon.
 
 ### Requirement: Backtests compare fixed research exit profiles
-The BTCUSDT batch research runner SHALL support disabled-by-default, fixed, named exit-profile comparisons for path-risk, stop, break-even, trailing, holding, target-only, close-confirmed, partial, protected residual, large-target, realized drawdown-guard, large-target close-stop, and occupancy-aware holding/target exit hypotheses while preserving the existing reference behavior when no exit, drawdown-guard, or occupancy profile is selected.
+The BTCUSDT batch research runner SHALL support disabled-by-default, fixed, named exit-profile comparisons for path-risk, stop, break-even, trailing, holding, target-only, close-confirmed, partial, protected residual, large-target, realized drawdown-guard, large-target close-stop, occupancy-aware holding/target, and exposure-scaled large-target exit hypotheses while preserving the existing reference behavior when no exit, drawdown-guard, occupancy, or exposure-scaled profile is selected.
 
-#### Scenario: Occupancy-aware holding profile is selected
-- **WHEN** a supported occupancy-aware holding or target profile is selected
-- **THEN** already-accepted long trades evaluate the configured fixed holding and optional favorable target thresholds using existing post-entry M15 bars only
-- **AND** new entries are skipped while the previous simulated trade remains inside its holding interval
-- **AND** the occupancy gate remains disabled unless selected by an explicit profile name
-- **AND** skip counts include a machine-readable occupancy reason
+#### Scenario: Exposure-scaled large-target profile is selected
+- **WHEN** a supported exposure-scaled large-target profile is selected
+- **THEN** already-accepted long trades evaluate the configured large-target or close-target holding exit using existing post-entry M15 bars only
+- **AND** the candidate uses its explicit fixed `base_quantity` setting while preserving the existing initial equity and research thresholds
+- **AND** the exposure-scaled profile remains disabled unless selected by an explicit profile name
 - **AND** entry scoring, M15 slope feature filtering, max-trades risk control, confirmation filters, regime filters, cost assumptions, and configured research thresholds remain unchanged.
 
 ### Requirement: Exit-profile batch summaries are auditable
-BTCUSDT batch summaries SHALL expose exit-profile, occupancy gate, and realized drawdown-guard comparison results separately from feature-filter, regime-filter, confirmation-filter, and cost dimensions.
+BTCUSDT batch summaries SHALL expose exit-profile, occupancy gate, realized drawdown-guard, and exposure-scaled comparison results separately from feature-filter, regime-filter, confirmation-filter, and cost dimensions.
 
-#### Scenario: Occupancy-aware profile is evaluated against the quarterly scorecard
-- **WHEN** an occupancy-aware holding or target profile is evaluated for the BTCUSDT quarterly `2023q1..2024q4` scorecard
-- **THEN** success requires all eight quarters to pass unchanged configured research thresholds
-- **AND** the summary records the occupancy setting, exit settings, cost settings, per-quarter metrics, blockers, and artifact paths
+#### Scenario: Exposure-scaled profile is evaluated against realistic costs
+- **WHEN** an exposure-scaled large-target profile is evaluated for the BTCUSDT quarterly `2023q1..2024q4` scorecard
+- **THEN** success requires all eight quarters to pass after realistic costs with unchanged thresholds
+- **AND** the summary records the exposure setting, exit settings, cost settings, per-quarter metrics, blockers, and artifact paths
 - **AND** no missing or skipped quarter is counted as a pass
 - **AND** a below-`8/8` result is archived as falsified research evidence with no success notification.
 
@@ -592,3 +591,4 @@ The robust profile search SHALL prioritize fixed, named profiles that reduce cos
 #### Scenario: High-turnover tight profile is used as reference
 - **WHEN** a microscopic tight-stop, one-bar, or high-turnover profile is included
 - **THEN** it is labelled as reference or negative robustness evidence unless it also passes the required realistic-cost `8/8` gate.
+

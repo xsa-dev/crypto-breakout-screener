@@ -47,6 +47,7 @@ BATCH_SUMMARY_COLUMNS = [
     "regime_filter_profile",
     "confirmation_filter_profile",
     "exit_profile",
+    "exposure_profile",
     "status",
     "blockers",
     "run_id",
@@ -74,6 +75,7 @@ BATCH_SUMMARY_COLUMNS = [
     "confirmation_filter_skip_counts_json",
     "exit_profile_settings_json",
     "exit_profile_counts_json",
+    "exposure_settings_json",
     "cost_model_settings_json",
     "feature_artifact_paths_json",
     "downloaded_csv_paths_json",
@@ -122,6 +124,7 @@ class BatchWindowSummary(BaseModel):
     regime_filter_profile: str = "none"
     confirmation_filter_profile: str = "none"
     exit_profile: str = "none"
+    exposure_profile: str = "none"
     status: Literal["passed", "failed", "blocked"]
     blockers: list[str] = Field(default_factory=list)
     run_id: str | None = None
@@ -149,6 +152,7 @@ class BatchWindowSummary(BaseModel):
     confirmation_filter_skip_counts: dict[str, int] = Field(default_factory=dict)
     exit_profile_settings: dict[str, Any] = Field(default_factory=dict)
     exit_profile_counts: dict[str, int] = Field(default_factory=dict)
+    exposure_settings: dict[str, Any] = Field(default_factory=dict)
     cost_model_settings: dict[str, Any] = Field(default_factory=dict)
     feature_artifact_paths: dict[str, str] = Field(default_factory=dict)
     downloaded_csv_paths: dict[str, str] = Field(default_factory=dict)
@@ -190,12 +194,14 @@ class BatchExperimentSummary(BaseModel):
     regime_filter_profile: str = "none"
     confirmation_filter_profile: str = "none"
     exit_profile: str = "none"
+    exposure_profile: str = "none"
     gate_settings: dict[str, Any] = Field(default_factory=dict)
     feature_filter_settings: dict[str, Any] = Field(default_factory=dict)
     risk_control_settings: dict[str, Any] = Field(default_factory=dict)
     regime_filter_settings: dict[str, Any] = Field(default_factory=dict)
     confirmation_filter_settings: dict[str, Any] = Field(default_factory=dict)
     exit_profile_settings: dict[str, Any] = Field(default_factory=dict)
+    exposure_settings: dict[str, Any] = Field(default_factory=dict)
     cost_model_settings: dict[str, Any] = Field(default_factory=dict)
     context_timeframes: list[str] = Field(default_factory=lambda: ["H1", "H4", "D1"])
     windows: list[BatchWindowSummary]
@@ -268,9 +274,12 @@ EXIT_PROFILE_NAMES = {
     "conservative-v1-m15-slope-positive-max-trades-8-target-1p0-hold-8",
     "conservative-v1-m15-slope-positive-max-trades-8-target-2p0-hold-16",
     "conservative-v1-m15-slope-positive-max-trades-8-target-3p0-hold-32",
+    "conservative-v1-m15-slope-positive-max-trades-8-target-3p0-hold-32-qty-0p5",
     "conservative-v1-m15-slope-positive-max-trades-8-target-4p0-hold-32",
+    "conservative-v1-m15-slope-positive-max-trades-8-target-4p0-hold-32-qty-0p5",
     "conservative-v1-m15-slope-positive-max-trades-8-close-stop-0p5-close-target-2p0-hold-16",
     "conservative-v1-m15-slope-positive-max-trades-8-close-target-2p0-hold-32",
+    "conservative-v1-m15-slope-positive-max-trades-8-close-target-2p0-hold-32-qty-0p5",
     "conservative-v1-m15-slope-positive-max-trades-8-target-3p0-hold-32-drawdown-30pct",
     "conservative-v1-m15-slope-positive-max-trades-8-target-4p0-hold-32-drawdown-30pct",
     "conservative-v1-m15-slope-positive-max-trades-8-close-target-2p0-hold-32-drawdown-30pct",
@@ -524,15 +533,21 @@ def exit_profile_config(name: str) -> BacktestExitProfileConfig:
         return BacktestExitProfileConfig(fixed_holding_bars=16, target_atr=2.0)
     if name == "conservative-v1-m15-slope-positive-max-trades-8-target-3p0-hold-32":
         return BacktestExitProfileConfig(fixed_holding_bars=32, target_atr=3.0)
+    if name == "conservative-v1-m15-slope-positive-max-trades-8-target-3p0-hold-32-qty-0p5":
+        return BacktestExitProfileConfig(fixed_holding_bars=32, target_atr=3.0)
     if name == "conservative-v1-m15-slope-positive-max-trades-8-target-3p0-hold-32-drawdown-30pct":
         return BacktestExitProfileConfig(fixed_holding_bars=32, target_atr=3.0)
     if name == "conservative-v1-m15-slope-positive-max-trades-8-target-4p0-hold-32":
+        return BacktestExitProfileConfig(fixed_holding_bars=32, target_atr=4.0)
+    if name == "conservative-v1-m15-slope-positive-max-trades-8-target-4p0-hold-32-qty-0p5":
         return BacktestExitProfileConfig(fixed_holding_bars=32, target_atr=4.0)
     if name == "conservative-v1-m15-slope-positive-max-trades-8-target-4p0-hold-32-drawdown-30pct":
         return BacktestExitProfileConfig(fixed_holding_bars=32, target_atr=4.0)
     if name == "conservative-v1-m15-slope-positive-max-trades-8-close-target-1p0-hold-8":
         return BacktestExitProfileConfig(fixed_holding_bars=8, close_target_atr=1.0)
     if name == "conservative-v1-m15-slope-positive-max-trades-8-close-target-2p0-hold-32":
+        return BacktestExitProfileConfig(fixed_holding_bars=32, close_target_atr=2.0)
+    if name == "conservative-v1-m15-slope-positive-max-trades-8-close-target-2p0-hold-32-qty-0p5":
         return BacktestExitProfileConfig(fixed_holding_bars=32, close_target_atr=2.0)
     if name == "conservative-v1-m15-slope-positive-max-trades-8-close-target-2p0-hold-32-drawdown-30pct":
         return BacktestExitProfileConfig(fixed_holding_bars=32, close_target_atr=2.0)
@@ -650,6 +665,18 @@ def _exit_profile_name(gate_profile: str) -> str:
     return "none"
 
 
+def _exposure_profile_name(gate_profile: str) -> str:
+    if gate_profile.endswith("-qty-0p5"):
+        return gate_profile
+    return "none"
+
+
+def _exposure_settings(exposure_profile: str) -> dict[str, float]:
+    if exposure_profile == "none":
+        return {}
+    return {"base_quantity": 0.5}
+
+
 def run_batch_experiment(
     *,
     windows: list[BatchWindow],
@@ -688,6 +715,7 @@ def run_batch_experiment(
     active_regime_filter_profile = _regime_filter_profile_name(gate_profile)
     active_confirmation_filter_profile = _confirmation_filter_profile_name(gate_profile)
     active_exit_profile = _exit_profile_name(gate_profile)
+    active_exposure_profile = _exposure_profile_name(gate_profile)
     active_gates = research_gates or research_gate_profile(gate_profile)
     active_feature_filters = feature_filters or feature_filter_profile(
         gate_profile if active_regime_filter_profile != "none" else active_feature_filter_profile
@@ -714,6 +742,7 @@ def run_batch_experiment(
         if active_exit_profile != "none"
         else {}
     )
+    exposure_settings = _exposure_settings(active_exposure_profile)
     cost_model_settings = _cost_model_settings(
         spread=spread,
         slippage=slippage,
@@ -737,6 +766,8 @@ def run_batch_experiment(
         confirmation_filter_settings=confirmation_filter_settings,
         exit_profile=active_exit_profile,
         exit_profile_settings=exit_profile_settings,
+        exposure_profile=active_exposure_profile,
+        exposure_settings=exposure_settings,
         cost_model_settings=cost_model_settings,
         bad_regime_diagnostics_enabled=enable_bad_regime_diagnostics,
         forward_path_diagnostics_enabled=enable_forward_path_diagnostics,
@@ -760,10 +791,12 @@ def run_batch_experiment(
                 regime_filter_profile=active_regime_filter_profile,
                 confirmation_filter_profile=active_confirmation_filter_profile,
                 exit_profile=active_exit_profile,
+                exposure_profile=active_exposure_profile,
                 research_gates=active_gates,
                 feature_filters=active_feature_filters,
                 confirmation_filters=active_confirmation_filters,
                 exit_profile_config=active_exit_config,
+                exposure_settings=exposure_settings,
                 cost_model_settings=cost_model_settings,
                 reuse_market_data=reuse_market_data,
                 spread=spread,
@@ -788,12 +821,14 @@ def run_batch_experiment(
                 regime_filter_profile=active_regime_filter_profile,
                 confirmation_filter_profile=active_confirmation_filter_profile,
                 exit_profile=active_exit_profile,
+                exposure_profile=active_exposure_profile,
                 gate_settings=gate_settings,
                 feature_filter_settings=feature_filter_settings,
                 risk_control_settings=risk_control_settings,
                 regime_filter_settings=regime_filter_settings,
                 confirmation_filter_settings=confirmation_filter_settings,
                 exit_profile_settings=exit_profile_settings,
+                exposure_settings=exposure_settings,
                 cost_model_settings=cost_model_settings,
                 status="failed",
                 blockers=[f"window_exception:{type(exc).__name__}:{exc}"],
@@ -828,12 +863,14 @@ def run_batch_experiment(
         regime_filter_profile=active_regime_filter_profile,
         confirmation_filter_profile=active_confirmation_filter_profile,
         exit_profile=active_exit_profile,
+        exposure_profile=active_exposure_profile,
         gate_settings=gate_settings,
         feature_filter_settings=feature_filter_settings,
         risk_control_settings=risk_control_settings,
         regime_filter_settings=regime_filter_settings,
         confirmation_filter_settings=confirmation_filter_settings,
         exit_profile_settings=exit_profile_settings,
+        exposure_settings=exposure_settings,
         cost_model_settings=cost_model_settings,
         windows=rows,
         aggregate=aggregate,
@@ -921,10 +958,12 @@ def _run_batch_window(
     regime_filter_profile: str,
     confirmation_filter_profile: str,
     exit_profile: str,
+    exposure_profile: str,
     research_gates: BacktestResearchGateConfig,
     feature_filters: BacktestFeatureFilterConfig,
     confirmation_filters: BacktestConfirmationFilterConfig,
     exit_profile_config: BacktestExitProfileConfig,
+    exposure_settings: dict[str, Any],
     cost_model_settings: dict[str, Any],
     reuse_market_data: bool,
     spread: float,
@@ -977,6 +1016,7 @@ def _run_batch_window(
         funding_per_bar=funding_per_bar,
         commission_rate=commission_rate,
         funding_rate_per_bar=funding_rate_per_bar,
+        **exposure_settings,
         forward_path_diagnostics=forward_path_diagnostics,
         path_risk_diagnostics=path_risk_diagnostics,
     )
@@ -994,6 +1034,7 @@ def _run_batch_window(
         regime_filter_profile=regime_filter_profile,
         confirmation_filter_profile=confirmation_filter_profile,
         exit_profile=exit_profile,
+        exposure_profile=exposure_profile,
         gate_settings=research_gates.model_dump(mode="json"),
         feature_filter_settings=feature_filters.model_dump(mode="json"),
         feature_filter_skip_counts=_feature_filter_skip_counts(result.artifact_dir / f"{result.run_id}-parameters.json"),
@@ -1011,6 +1052,7 @@ def _run_batch_window(
         if exit_profile != "none"
         else {},
         exit_profile_counts=_exit_profile_counts(result.artifact_dir / f"{result.run_id}-parameters.json"),
+        exposure_settings=exposure_settings,
         cost_model_settings=cost_model_settings,
         status="passed",
         run_id=result.run_id,
@@ -1752,6 +1794,7 @@ def _csv_row(row: BatchWindowSummary) -> dict[str, str | int | float | None]:
         "regime_filter_profile": row.regime_filter_profile,
         "confirmation_filter_profile": row.confirmation_filter_profile,
         "exit_profile": row.exit_profile,
+        "exposure_profile": row.exposure_profile,
         "status": row.status,
         "blockers": ";".join(row.blockers),
         "run_id": row.run_id,
@@ -1779,6 +1822,7 @@ def _csv_row(row: BatchWindowSummary) -> dict[str, str | int | float | None]:
         "confirmation_filter_skip_counts_json": json.dumps(row.confirmation_filter_skip_counts, sort_keys=True),
         "exit_profile_settings_json": json.dumps(row.exit_profile_settings, sort_keys=True),
         "exit_profile_counts_json": json.dumps(row.exit_profile_counts, sort_keys=True),
+        "exposure_settings_json": json.dumps(row.exposure_settings, sort_keys=True),
         "cost_model_settings_json": json.dumps(row.cost_model_settings, sort_keys=True),
         "feature_artifact_paths_json": json.dumps(row.feature_artifact_paths, sort_keys=True),
         "downloaded_csv_paths_json": json.dumps(row.downloaded_csv_paths, sort_keys=True),
@@ -1881,6 +1925,8 @@ def _batch_id(
     confirmation_filter_settings: dict[str, Any] | None = None,
     exit_profile: str = "none",
     exit_profile_settings: dict[str, Any] | None = None,
+    exposure_profile: str = "none",
+    exposure_settings: dict[str, Any] | None = None,
     cost_model_settings: dict[str, Any] | None = None,
     bad_regime_diagnostics_enabled: bool = False,
     forward_path_diagnostics_enabled: bool = False,
@@ -1904,6 +1950,8 @@ def _batch_id(
         "confirmation_filter_settings": confirmation_filter_settings or {},
         "exit_profile": exit_profile,
         "exit_profile_settings": exit_profile_settings or {},
+        "exposure_profile": exposure_profile,
+        "exposure_settings": exposure_settings or {},
         "cost_model_settings": cost_model_settings or {},
         "bad_regime_diagnostics_enabled": bad_regime_diagnostics_enabled,
         "forward_path_diagnostics_enabled": forward_path_diagnostics_enabled,

@@ -25,21 +25,12 @@ The system SHALL define a bounded local discovery step for selecting the next br
 ### Requirement: BTCUSDT research uses an eight-quarter scorecard
 The system SHALL require every selected BTCUSDT breakout research hypothesis to define an explicit eight-quarter scorecard before source implementation. For this research line, `8/8` means all eight quarterly windows from 2023q1 through 2024q4 pass configured research thresholds.
 
-#### Scenario: Scorecard is created
-- **WHEN** a research hypothesis is selected
+#### Scenario: Exposure-scaled profile scorecard is created
+- **WHEN** an exposure-scaled exit/path-risk profile is selected
 - **THEN** the scorecard contains exactly these windows: `2023q1`, `2023q2`, `2023q3`, `2023q4`, `2024q1`, `2024q2`, `2024q3`, and `2024q4`
 - **AND** each quarter has one of the statuses `pass`, `fail`, `unknown`, or `blocked`
 - **AND** each quarter identifies the command, artifact, metric, blocker, or review evidence needed to verify it
-
-#### Scenario: Archived reference exists
-- **WHEN** the research loop reconstructs the current BTCUSDT breakout hypothesis from archives
-- **THEN** it identifies `conservative-v1-m15-slope-positive-max-trades-8` as the current archived reference unless a later reviewed OpenSpec change supersedes it
-- **AND** it records the archived state as `5/8` with failing quarters `2024q1`, `2024q2`, and `2024q4`
-
-#### Scenario: Supporting criteria exist
-- **WHEN** acceptance criteria, thresholds, safety gates, reproducibility requirements, or observability requirements are reviewed
-- **THEN** they are attached to the relevant quarterly windows or to the overall hypothesis evidence
-- **AND** they do not replace the eight-quarter pass requirement
+- **AND** changing fixed candidate exposure SHALL NOT weaken `min_trade_count`, `min_net_profit`, `min_profit_factor`, `min_max_drawdown`, feed-gap requirements, realistic-cost requirements, or quarter coverage.
 
 ### Requirement: Research iterations target the highest-impact failing quarter or shared mechanism
 The system SHALL drive each research iteration toward the failing quarter or shared failure mechanism that most directly prevents quarterly `8/8`.
@@ -131,3 +122,4 @@ The BTCUSDT breakout research loop SHALL send a Telegram success notification on
 - **WHEN** a candidate reaches `8/8` after realistic costs
 - **THEN** a Telegram success notification is sent or the send failure is recorded
 - **AND** the notification includes the change id, profile name, realistic cost settings, passed quarters, thresholds, summary artifact paths, and no secrets or private account data.
+

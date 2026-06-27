@@ -326,10 +326,12 @@ def test_batch_runner_records_exit_profile(tmp_path) -> None:
     ]
     seen_exit_profiles: list[dict[str, Any]] = []
     seen_gate_profiles: list[dict[str, Any]] = []
+    seen_base_quantities: list[float] = []
 
     def run_single(**kwargs: Any) -> CryptoExperimentResult:
         seen_exit_profiles.append(kwargs["exit_profile"].model_dump(mode="json", exclude_none=True))
         seen_gate_profiles.append(kwargs["research_gates"].model_dump(mode="json", exclude_none=True))
+        seen_base_quantities.append(float(kwargs.get("base_quantity", 10.0)))
         return _fake_run_factory(tmp_path)(**kwargs)
 
     profile = "conservative-v1-m15-slope-positive-max-trades-8-atr-stop-1p0-target-1p5"
@@ -351,6 +353,7 @@ def test_batch_runner_records_exit_profile(tmp_path) -> None:
         "target_atr": 1.5,
     }
     assert seen_exit_profiles == [row.exit_profile_settings]
+    assert seen_base_quantities == [10.0]
     assert exit_profile_config(profile).model_dump(mode="json", exclude_none=True) == row.exit_profile_settings
 
     with result.summary_csv_path.open(newline="", encoding="utf-8") as file:
@@ -412,6 +415,37 @@ def test_batch_runner_records_exit_profile(tmp_path) -> None:
         "fixed_holding_bars": 32,
         "target_atr": 4.0,
     }
+
+    scaled_larger_target_profile = (
+        "conservative-v1-m15-slope-positive-max-trades-8-target-4p0-hold-32-qty-0p5"
+    )
+    scaled_result = run_batch_experiment(
+        windows=windows,
+        output_dir=tmp_path / "scaled-backtests",
+        market_data_dir=tmp_path / "scaled-market-data",
+        gate_profile=scaled_larger_target_profile,
+        download=_fake_download_factory(tmp_path),
+        run_single=run_single,
+    )
+    scaled_row = scaled_result.summary.windows[0]
+    assert scaled_result.summary.exposure_profile == scaled_larger_target_profile
+    assert scaled_result.summary.exposure_settings == {"base_quantity": 0.5}
+    assert scaled_row.exposure_profile == scaled_larger_target_profile
+    assert scaled_row.exposure_settings == {"base_quantity": 0.5}
+    assert scaled_row.exit_profile_settings == {
+        "fixed_holding_bars": 32,
+        "target_atr": 4.0,
+    }
+    assert seen_base_quantities[-1] == 0.5
+
+    with scaled_result.summary_csv_path.open(newline="", encoding="utf-8") as file:
+        scaled_rows = list(csv.DictReader(file))
+    assert scaled_rows[0]["exposure_profile"] == scaled_larger_target_profile
+    assert json.loads(scaled_rows[0]["exposure_settings_json"]) == {"base_quantity": 0.5}
+
+    scaled_summary = json.loads(scaled_result.summary_json_path.read_text(encoding="utf-8"))
+    assert scaled_summary["exposure_profile"] == scaled_larger_target_profile
+    assert scaled_summary["exposure_settings"] == {"base_quantity": 0.5}
 
     target_drawdown_profile = (
         "conservative-v1-m15-slope-positive-max-trades-8-target-4p0-hold-32-"
