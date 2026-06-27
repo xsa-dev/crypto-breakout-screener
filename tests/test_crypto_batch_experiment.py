@@ -397,6 +397,20 @@ def test_batch_runner_records_exit_profile(tmp_path) -> None:
         "target_atr": 1.0,
     }
 
+    large_target_profile = "conservative-v1-m15-slope-positive-max-trades-8-target-3p0-hold-32"
+    assert exit_profile_config(large_target_profile).model_dump(mode="json", exclude_none=True) == {
+        "fixed_holding_bars": 32,
+        "target_atr": 3.0,
+    }
+
+    larger_target_profile = "conservative-v1-m15-slope-positive-max-trades-8-target-4p0-hold-32"
+    assert exit_profile_config(larger_target_profile).model_dump(
+        mode="json", exclude_none=True
+    ) == {
+        "fixed_holding_bars": 32,
+        "target_atr": 4.0,
+    }
+
     close_target_only_profile = (
         "conservative-v1-m15-slope-positive-max-trades-8-close-target-1p0-hold-8"
     )
@@ -405,6 +419,16 @@ def test_batch_runner_records_exit_profile(tmp_path) -> None:
     ) == {
         "fixed_holding_bars": 8,
         "close_target_atr": 1.0,
+    }
+
+    close_large_target_profile = (
+        "conservative-v1-m15-slope-positive-max-trades-8-close-target-2p0-hold-32"
+    )
+    assert exit_profile_config(close_large_target_profile).model_dump(
+        mode="json", exclude_none=True
+    ) == {
+        "fixed_holding_bars": 32,
+        "close_target_atr": 2.0,
     }
 
     partial_profile = (
