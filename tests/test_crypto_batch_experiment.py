@@ -14,9 +14,11 @@ from src.app.breakout.experiments.crypto_batch import (
     BatchWindow,
     ResearchThresholds,
     exit_profile_config,
+    fixed_altcoin_research_universe,
     parse_windows,
     run_batch_experiment,
 )
+from src.app.breakout.experiments.crypto_portfolio_batch import run_portfolio_batch_experiment
 
 
 def test_batch_runner_writes_deterministic_summary_and_research_verdict(tmp_path, monkeypatch) -> None:
@@ -982,15 +984,48 @@ def test_batch_runner_records_failed_window_without_passing_batch(tmp_path) -> N
     assert result.summary.aggregate.hypothesis_supported is False
 
 
+def test_batch_runner_records_blank_metrics_as_missing_blockers(tmp_path) -> None:
+    windows = [
+        BatchWindow(
+            label="blank-pf",
+            start=datetime(2024, 1, 1, tzinfo=UTC),
+            end=datetime(2024, 1, 2, tzinfo=UTC),
+        )
+    ]
+
+    result = run_batch_experiment(
+        windows=windows,
+        output_dir=tmp_path / "backtests",
+        market_data_dir=tmp_path / "market-data",
+        download=_fake_download_factory(tmp_path),
+        run_single=_fake_run_factory(tmp_path, profit_factor=None),
+    )
+
+    row = result.summary.windows[0]
+    assert row.status == "blocked"
+    assert row.profit_factor is None
+    assert "missing_profit_factor" in row.blockers
+    assert result.summary.aggregate.technical_pass is False
+
+
 def test_batch_input_validation_and_window_parsing(tmp_path) -> None:
     windows = parse_windows("one:2024-01-01T00:00:00Z/2024-01-02T00:00:00Z")
     assert windows[0].label == "one"
     assert windows[0].start == datetime(2024, 1, 1, tzinfo=UTC)
 
-    with pytest.raises(ValueError, match="BTCUSDT only"):
+    eth = run_batch_experiment(
+        windows=windows,
+        symbol="ETHUSDT",
+        output_dir=tmp_path,
+        market_data_dir=tmp_path,
+        download=_fake_download_factory(tmp_path),
+        run_single=_fake_run_factory(tmp_path),
+    )
+    assert eth.summary.symbol == "ETHUSDT"
+    with pytest.raises(ValueError, match="unsupported public crypto research symbol"):
         run_batch_experiment(
             windows=windows,
-            symbol="ETHUSDT",
+            symbol="NOTUSDT",
             output_dir=tmp_path,
             market_data_dir=tmp_path,
             download=_fake_download_factory(tmp_path),
@@ -1004,6 +1039,163 @@ def test_batch_input_validation_and_window_parsing(tmp_path) -> None:
             download=_fake_download_factory(tmp_path),
             run_single=_fake_run_factory(tmp_path),
         )
+
+
+def test_fixed_altcoin_universe_is_deterministic() -> None:
+    universe = fixed_altcoin_research_universe()
+
+    assert len(universe) == 50
+    assert universe[0] == "ETHUSDT"
+    assert "BTCUSDT" not in universe
+    assert len(set(universe)) == len(universe)
+
+
+def test_portfolio_batch_uses_one_shared_bankroll_and_exposure_cap(tmp_path) -> None:
+    windows = [
+        BatchWindow(
+            label="portfolio",
+            start=datetime(2024, 1, 1, tzinfo=UTC),
+            end=datetime(2024, 1, 2, tzinfo=UTC),
+        )
+    ]
+    result = run_portfolio_batch_experiment(
+        windows=windows,
+        universe="ethusdt-only",
+        symbols=("ETHUSDT", "SOLUSDT"),
+        output_dir=tmp_path / "portfolio",
+        market_data_dir=tmp_path / "market-data",
+        gate_profile="conservative-v1-m15-slope-positive-max-trades-8-target-4p0-hold-32",
+        starting_equity=10_000.0,
+        max_trade_notional=1_000.0,
+        max_total_open_notional=1_000.0,
+        run_symbol_batch=_fake_symbol_batch_factory(tmp_path),
+    )
+
+    window = result.summary.windows[0]
+    assert result.summary.aggregate.starting_equity == 10_000.0
+    assert result.summary.aggregate.max_total_open_notional == 1_000.0
+    assert window.trade_count == 2
+    assert window.accepted_trade_count == 1
+    assert window.skipped_exposure_trade_count == 1
+    assert window.net_profit == 100.0
+    assert window.status == "passed"
+
+    with Path(window.trade_csv_path or "").open(newline="", encoding="utf-8") as file:
+        trade_rows = list(csv.DictReader(file))
+    assert [row["accepted"] for row in trade_rows] == ["True", "False"]
+    assert trade_rows[1]["blocker"] == "portfolio_total_exposure_cap_exceeded"
+
+
+def test_portfolio_batch_blocks_bearish_or_ambiguous_regimes(tmp_path) -> None:
+    windows = [
+        BatchWindow(
+            label="portfolio",
+            start=datetime(2024, 1, 1, tzinfo=UTC),
+            end=datetime(2024, 1, 2, tzinfo=UTC),
+        )
+    ]
+    result = run_portfolio_batch_experiment(
+        windows=windows,
+        universe="ethusdt-only",
+        symbols=("ETHUSDT",),
+        output_dir=tmp_path / "portfolio",
+        market_data_dir=tmp_path / "market-data",
+        gate_profile="conservative-v1-m15-slope-positive-max-trades-8-target-4p0-hold-32",
+        run_symbol_batch=_fake_symbol_batch_factory(
+            tmp_path,
+            h1_trend="short_or_flat",
+            h4_trend="short_or_flat",
+            d1_trend="short_or_flat",
+        ),
+    )
+
+    window = result.summary.windows[0]
+    assert window.accepted_trade_count == 0
+    assert window.skipped_exposure_trade_count == 1
+    assert window.blockers == [
+        "trade_count_below_threshold",
+        "net_profit_below_threshold",
+        "profit_factor_below_threshold",
+    ]
+    assert result.summary.per_regime_contributions[1].regime_label == "bear_short_or_avoid"
+    assert result.summary.per_regime_contributions[1].regime_decision == "risk_off_blocked"
+    assert result.summary.per_regime_contributions[1].skipped_blocked_signal_count == 1
+
+    with Path(window.trade_csv_path or "").open(newline="", encoding="utf-8") as file:
+        trade_rows = list(csv.DictReader(file))
+    assert trade_rows[0]["accepted"] == "False"
+    assert trade_rows[0]["regime_label"] == "bear_short_or_avoid"
+    assert trade_rows[0]["blocker"] == "portfolio_regime_bear_short_or_avoid"
+
+
+def test_portfolio_batch_marks_symbol_failures_as_technical_blockers(tmp_path) -> None:
+    windows = [
+        BatchWindow(
+            label="portfolio",
+            start=datetime(2024, 1, 1, tzinfo=UTC),
+            end=datetime(2024, 1, 2, tzinfo=UTC),
+        )
+    ]
+
+    def run_symbol_batch(**kwargs: Any):
+        if kwargs["symbol"] == "SOLUSDT":
+            msg = "cached public market-data CSVs are missing: SOLUSDT"
+            raise FileNotFoundError(msg)
+        return _fake_symbol_batch_factory(tmp_path)(**kwargs)
+
+    result = run_portfolio_batch_experiment(
+        windows=windows,
+        universe="ethusdt-only",
+        symbols=("ETHUSDT", "SOLUSDT"),
+        output_dir=tmp_path / "portfolio",
+        market_data_dir=tmp_path / "market-data",
+        gate_profile="conservative-v1-m15-slope-positive-max-trades-8-target-4p0-hold-32",
+        run_symbol_batch=run_symbol_batch,
+    )
+
+    window = result.summary.windows[0]
+    assert window.status == "blocked"
+    assert "portfolio_symbol_blockers_present" in window.blockers
+    assert result.summary.aggregate.technical_pass is False
+    assert result.summary.aggregate.hypothesis_supported is False
+
+
+def test_portfolio_batch_includes_economically_failed_symbol_trades(tmp_path) -> None:
+    windows = [
+        BatchWindow(
+            label="portfolio",
+            start=datetime(2024, 1, 1, tzinfo=UTC),
+            end=datetime(2024, 1, 2, tzinfo=UTC),
+        )
+    ]
+    result = run_portfolio_batch_experiment(
+        windows=windows,
+        universe="ethusdt-only",
+        symbols=("ETHUSDT", "SOLUSDT"),
+        output_dir=tmp_path / "portfolio",
+        market_data_dir=tmp_path / "market-data",
+        gate_profile="conservative-v1-m15-slope-positive-max-trades-8-target-4p0-hold-32",
+        max_total_open_notional=2_000.0,
+        run_symbol_batch=_fake_symbol_batch_factory(
+            tmp_path,
+            symbol_net_profits={"ETHUSDT": 100.0, "SOLUSDT": -150.0},
+        ),
+    )
+
+    window = result.summary.windows[0]
+    assert window.status == "failed"
+    assert window.trade_count == 2
+    assert window.accepted_trade_count == 2
+    assert window.net_profit == -50.0
+    assert window.net_profit_buffer == -50.0
+    assert window.profit_factor_buffer == -0.33333333333333337
+    assert window.max_drawdown_buffer == 0.3351485148514851
+    assert result.summary.aggregate.technical_pass is True
+
+    with Path(window.trade_csv_path or "").open(newline="", encoding="utf-8") as file:
+        trade_rows = list(csv.DictReader(file))
+    assert [row["symbol"] for row in trade_rows] == ["ETHUSDT", "SOLUSDT"]
+    assert [row["accepted"] for row in trade_rows] == ["True", "True"]
 
 
 def _fake_download_factory(tmp_path: Path):
@@ -1036,11 +1228,101 @@ def _fake_download_factory(tmp_path: Path):
     return download
 
 
+def _fake_symbol_batch_factory(
+    tmp_path: Path,
+    *,
+    h1_trend: str = "long",
+    h4_trend: str = "long",
+    d1_trend: str = "long",
+    symbol_net_profits: dict[str, float] | None = None,
+):
+    def run_symbol_batch(**kwargs: Any):
+        symbol = kwargs["symbol"]
+        net_profit = (symbol_net_profits or {}).get(symbol, 100.0)
+        profit_factor = 2.0 if net_profit > 0 else 2.0 / 3.0
+
+        def run_single(**single_kwargs: Any) -> CryptoExperimentResult:
+            csv_path = Path(single_kwargs["csv_path"])
+            label = csv_path.stem
+            run_id = f"run-{symbol}-{label}"
+            output_dir = Path(single_kwargs["output_dir"])
+            artifact_dir = output_dir / "crypto" / symbol / run_id
+            artifact_dir.mkdir(parents=True, exist_ok=True)
+            metrics_path = artifact_dir / f"{run_id}-metrics.csv"
+            trades_path = artifact_dir / f"{run_id}-trades.csv"
+            entry_features_path = artifact_dir / f"{run_id}-entry-feature-snapshots.csv"
+            parameters_path = artifact_dir / f"{run_id}-parameters.json"
+            manifest_path = artifact_dir / f"{run_id}-dataset-manifest.json"
+            metrics_path.write_text(
+                "metric,value\n"
+                "trade_count,1\n"
+                f"net_profit,{net_profit}\n"
+                "max_drawdown,-0.01\n"
+                f"profit_factor,{profit_factor}\n"
+                "win_rate,1.0\n"
+                "sharpe_ratio,1.0\n"
+                f"average_trade,{net_profit}\n"
+                f"expectancy,{net_profit}\n",
+                encoding="utf-8",
+            )
+            trades_path.write_text(
+                "trade_id,symbol,side,entry_time,exit_time,entry_price,exit_price,quantity,gross_pnl,total_cost,net_pnl,holding_bars,scenario,score,slippage\n"
+                f"{run_id}-1,{symbol},long,2024-01-01T00:00:00+00:00,2024-01-01T01:00:00+00:00,100,110,10,110,10,{net_profit},4,consolidation_breakout,80,0\n",
+                encoding="utf-8",
+            )
+            entry_features_path.write_text(
+                "trade_id,symbol,entry_time,net_pnl,feature_context_H1_trend_alignment,feature_context_H4_trend_alignment,feature_context_D1_trend_alignment\n"
+                f"{run_id}-1,{symbol},2024-01-01T00:00:00+00:00,{net_profit},{h1_trend},{h4_trend},{d1_trend}\n",
+                encoding="utf-8",
+            )
+            parameters_path.write_text(
+                json.dumps({"research_gate_skip_counts": {}, "exit_profile_counts": {}}, sort_keys=True),
+                encoding="utf-8",
+            )
+            manifest_path.write_text(
+                json.dumps(
+                    {"feed_gaps": [], "available_context_timeframes": ["H1", "H4", "D1"]},
+                    sort_keys=True,
+                ),
+                encoding="utf-8",
+            )
+            artifact_paths = [
+                str(metrics_path),
+                str(trades_path),
+                str(entry_features_path),
+                str(parameters_path),
+                str(manifest_path),
+            ]
+            return CryptoExperimentResult(
+                run_id=run_id,
+                symbol=symbol,
+                timeframe="M15",
+                bar_count=100,
+                dataset_hash=f"sha256:dataset-{symbol}-{label}",
+                config_hash="sha256:config",
+                trade_count=1,
+                net_pnl=net_profit,
+                max_drawdown=-0.01,
+                win_rate=1.0,
+                artifact_dir=artifact_dir,
+                manifest_path=manifest_path,
+                artifact_paths=artifact_paths,
+            )
+
+        return run_batch_experiment(
+            **kwargs,
+            download=_fake_download_factory(tmp_path),
+            run_single=run_single,
+        )
+
+    return run_symbol_batch
+
+
 def _fake_run_factory(
     tmp_path: Path,
     *,
     net_profit: float = 100.0,
-    profit_factor: float = 1.5,
+    profit_factor: float | None = 1.5,
     feed_gaps: list[dict[str, Any]] | None = None,
 ):
     def run_single(**kwargs: Any) -> CryptoExperimentResult:
@@ -1061,12 +1343,13 @@ def _fake_run_factory(
         path_risk_path = artifact_dir / f"{run_id}-path-risk-diagnostics.csv"
         path_risk_summary_path = artifact_dir / f"{run_id}-path-risk-threshold-summary.csv"
         parameters_path = artifact_dir / f"{run_id}-parameters.json"
+        profit_factor_text = "" if profit_factor is None else str(profit_factor)
         metrics_path.write_text(
             "metric,value\n"
             "trade_count,10\n"
             f"net_profit,{net_profit}\n"
             "max_drawdown,-0.1\n"
-            f"profit_factor,{profit_factor}\n"
+            f"profit_factor,{profit_factor_text}\n"
             "win_rate,0.6\n"
             "sharpe_ratio,0.4\n"
             "average_trade,10\n"

@@ -110,8 +110,11 @@ def test_crypto_runner_writes_manifest_report_artifacts_and_omits_private_env(
 
 
 def test_crypto_runner_keeps_first_slice_scope() -> None:
-    with pytest.raises(ValueError, match="BTCUSDT only"):
-        run_crypto_experiment(csv_path=FIXTURE, symbol="ETHUSDT")
+    eth = run_crypto_experiment(csv_path=FIXTURE, symbol="ETHUSDT")
+    assert eth.symbol == "ETHUSDT"
+    assert "crypto/ETHUSDT" in str(eth.artifact_dir)
+    with pytest.raises(ValueError, match="unsupported public crypto research symbol"):
+        run_crypto_experiment(csv_path=FIXTURE, symbol="NOTUSDT")
     with pytest.raises(ValueError, match="M15 only"):
         run_crypto_experiment(csv_path=FIXTURE, timeframe="H1")
 
@@ -237,11 +240,31 @@ def test_download_and_run_records_public_source_and_context_paths(tmp_path, monk
 
 
 def test_public_downloader_validates_inputs_and_errors(tmp_path, monkeypatch) -> None:
-    with pytest.raises(ValueError, match="BTCUSDT only"):
+    async def one_row_request(*, session, params, timeout_seconds, max_retries):
+        del session, timeout_seconds, max_retries
+        return {
+            "retCode": 0,
+            "retMsg": "OK",
+            "result": {
+                "list": [
+                    [params["start"], "100", "110", "90", "105", "10", "0"],
+                ]
+            },
+        }
+
+    monkeypatch.setattr(crypto_backtest, "_request_bybit_public_json", one_row_request)
+    eth = download_bybit_public_ohlcv_sync(
+        start=datetime(2026, 1, 1, tzinfo=UTC),
+        end=datetime(2026, 1, 2, tzinfo=UTC),
+        symbol="ETHUSDT",
+        output_dir=tmp_path,
+    )
+    assert eth.symbol == "ETHUSDT"
+    with pytest.raises(ValueError, match="unsupported public crypto research symbol"):
         download_bybit_public_ohlcv_sync(
             start=datetime(2026, 1, 1, tzinfo=UTC),
             end=datetime(2026, 1, 2, tzinfo=UTC),
-            symbol="ETHUSDT",
+            symbol="NOTUSDT",
             output_dir=tmp_path,
         )
     with pytest.raises(ValueError, match="requires M15,H1,H4,D1"):

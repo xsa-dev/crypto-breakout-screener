@@ -23,6 +23,10 @@ import aiohttp
 from pydantic import BaseModel, Field
 
 from src.app.breakout.backtesting import BacktestEngine, stable_hash
+from src.app.breakout.experiments.crypto_symbols import (
+    DEFAULT_CRYPTO_RESEARCH_SYMBOL,
+    normalize_crypto_research_symbol,
+)
 from src.app.breakout.normalizer import Normalizer, to_utc
 from src.core.enums import TimeFrame
 from src.core.models import (
@@ -135,7 +139,7 @@ class CryptoExperimentResult:
 def import_crypto_csv(
     path: str | Path,
     *,
-    symbol: str = "BTCUSDT",
+    symbol: str = DEFAULT_CRYPTO_RESEARCH_SYMBOL,
     timeframe: str = TimeFrame.M15.value,
 ) -> CsvImportResult:
     """Import public OHLCV CSV rows into canonical Bars with deterministic diagnostics."""
@@ -186,7 +190,7 @@ async def download_bybit_public_ohlcv(
     start: datetime,
     end: datetime,
     output_dir: str | Path = "artifacts/market-data",
-    symbol: str = "BTCUSDT",
+    symbol: str = DEFAULT_CRYPTO_RESEARCH_SYMBOL,
     timeframes: Sequence[str] = REQUIRED_DOWNLOAD_TIMEFRAMES,
     category: Literal["linear"] = "linear",
     limit: int = 1000,
@@ -260,7 +264,7 @@ def run_crypto_experiment(
     *,
     csv_path: str | Path,
     output_dir: str | Path = "artifacts/backtests",
-    symbol: str = "BTCUSDT",
+    symbol: str = DEFAULT_CRYPTO_RESEARCH_SYMBOL,
     timeframe: str = TimeFrame.M15.value,
     instrument_type: Literal["perpetual", "futures"] = "perpetual",
     source: Literal["csv", "bybit_public"] = "csv",
@@ -286,11 +290,9 @@ def run_crypto_experiment(
     forward_path_diagnostics: bool = False,
     path_risk_diagnostics: bool = False,
 ) -> CryptoExperimentResult:
-    """Run the first BTCUSDT crypto historical experiment and write local artifacts."""
+    """Run an approved public crypto historical experiment and write local artifacts."""
 
-    if symbol != "BTCUSDT":
-        msg = "first crypto historical experiment is scoped to BTCUSDT only"
-        raise ValueError(msg)
+    symbol = normalize_crypto_research_symbol(symbol)
     if timeframe != TimeFrame.M15.value:
         msg = "first crypto historical experiment is scoped to M15 only"
         raise ValueError(msg)
@@ -632,9 +634,7 @@ def _download_csv_path(
 def _validate_download_inputs(
     *, symbol: str, start: datetime, end: datetime
 ) -> tuple[datetime, datetime]:
-    if symbol != "BTCUSDT":
-        msg = "public downloader is scoped to BTCUSDT only"
-        raise ValueError(msg)
+    normalize_crypto_research_symbol(symbol)
     start_utc = to_utc(start)
     end_utc = to_utc(end)
     if end_utc <= start_utc:

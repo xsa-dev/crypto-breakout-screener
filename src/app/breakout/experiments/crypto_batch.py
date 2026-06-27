@@ -27,6 +27,11 @@ from src.app.breakout.experiments.crypto_backtest import (
     download_bybit_public_ohlcv_sync,
     run_crypto_experiment,
 )
+from src.app.breakout.experiments.crypto_symbols import (
+    DEFAULT_CRYPTO_RESEARCH_SYMBOL,
+    FIXED_ALTCOIN_RESEARCH_UNIVERSE,
+    normalize_crypto_research_symbol,
+)
 from src.app.breakout.normalizer import to_utc
 from src.core.enums import TimeFrame
 from src.core.models import (
@@ -184,7 +189,7 @@ class BatchExperimentSummary(BaseModel):
     """Complete batch summary written as JSON and CSV."""
 
     batch_id: str
-    symbol: Literal["BTCUSDT"] = "BTCUSDT"
+    symbol: str = DEFAULT_CRYPTO_RESEARCH_SYMBOL
     market: Literal["crypto"] = "crypto"
     source: Literal["bybit_public"] = "bybit_public"
     execution_timeframe: Literal["M15"] = "M15"
@@ -227,6 +232,12 @@ class BatchExperimentResult:
 
 DownloadCallable = Callable[..., PublicDownloadResult]
 RunCallable = Callable[..., CryptoExperimentResult]
+
+
+def fixed_altcoin_research_universe() -> tuple[str, ...]:
+    """Return the deterministic 50-symbol non-BTC public research universe."""
+
+    return FIXED_ALTCOIN_RESEARCH_UNIVERSE
 
 
 def _parse_required_datetime(value: str) -> datetime:
@@ -829,14 +840,14 @@ def run_batch_experiment(
     funding_per_bar: float = 0.0,
     commission_rate: float = 0.0,
     funding_rate_per_bar: float = 0.0,
-    symbol: str = "BTCUSDT",
+    symbol: str = DEFAULT_CRYPTO_RESEARCH_SYMBOL,
     continue_on_error: bool = True,
     download: DownloadCallable = download_bybit_public_ohlcv_sync,
     run_single: RunCallable = run_crypto_experiment,
 ) -> BatchExperimentResult:
     """Run BTCUSDT public-data research experiments over multiple windows."""
 
-    _validate_batch_inputs(symbol=symbol, windows=windows)
+    symbol = _validate_batch_inputs(symbol=symbol, windows=windows)
     active_thresholds = thresholds or ResearchThresholds()
     active_feature_filter_profile = _feature_filter_profile_name(
         gate_profile,
@@ -900,6 +911,7 @@ def run_batch_experiment(
         exposure_profile=active_exposure_profile,
         exposure_settings=exposure_settings,
         cost_model_settings=cost_model_settings,
+        symbol=symbol,
         bad_regime_diagnostics_enabled=enable_bad_regime_diagnostics,
         forward_path_diagnostics_enabled=enable_forward_path_diagnostics,
         path_risk_diagnostics_enabled=enable_path_risk_diagnostics,
@@ -988,6 +1000,7 @@ def run_batch_experiment(
         diagnostic_paths.update(_write_path_risk_batch_diagnostics(artifact_dir=artifact_dir, rows=rows))
     summary = BatchExperimentSummary(
         batch_id=batch_id,
+        symbol=symbol,
         gate_profile=gate_profile,
         feature_filter_profile=active_feature_filter_profile,
         risk_control_profile=active_risk_control_profile,
@@ -1190,14 +1203,14 @@ def _run_batch_window(
         dataset_hash=result.dataset_hash,
         config_hash=result.config_hash,
         bar_count=result.bar_count,
-        trade_count=int(metrics.get("trade_count", result.trade_count)),
-        net_profit=float(metrics.get("net_profit", result.net_pnl)),
-        max_drawdown=float(metrics.get("max_drawdown", result.max_drawdown)),
-        profit_factor=_optional_float(metrics.get("profit_factor")),
-        win_rate=float(metrics.get("win_rate", result.win_rate)),
-        sharpe_ratio=_optional_float(metrics.get("sharpe_ratio")),
-        average_trade=_optional_float(metrics.get("average_trade")),
-        expectancy=_optional_float(metrics.get("expectancy")),
+        trade_count=_metric_int(metrics, "trade_count", default=result.trade_count),
+        net_profit=_metric_float(metrics, "net_profit", default=result.net_pnl),
+        max_drawdown=_metric_float(metrics, "max_drawdown", default=result.max_drawdown),
+        profit_factor=_metric_float(metrics, "profit_factor", default=None),
+        win_rate=_metric_float(metrics, "win_rate", default=result.win_rate),
+        sharpe_ratio=_metric_float(metrics, "sharpe_ratio", default=None),
+        average_trade=_metric_float(metrics, "average_trade", default=None),
+        expectancy=_metric_float(metrics, "expectancy", default=None),
         feed_gap_count=feed_gap_count,
         context_timeframes_available=available_context,
         feature_artifact_paths=_feature_artifact_paths(result.artifact_paths),
@@ -1271,10 +1284,25 @@ def _row_is_technical_pass(row: BatchWindowSummary) -> bool:
     return not any(blocker in TECHNICAL_BLOCKERS for blocker in row.blockers)
 
 
-def _read_metrics(path: Path) -> dict[str, float]:
+def _read_metrics(path: Path) -> dict[str, float | None]:
     with path.open(newline="", encoding="utf-8") as file:
         reader = csv.DictReader(file)
-        return {str(row["metric"]): float(str(row["value"])) for row in reader}
+        return {str(row["metric"]): _optional_float(row.get("value")) for row in reader}
+
+
+def _metric_float(
+    metrics: dict[str, float | None], key: str, *, default: float | None
+) -> float | None:
+    if key not in metrics:
+        return default
+    return metrics[key]
+
+
+def _metric_int(metrics: dict[str, float | None], key: str, *, default: int | None) -> int | None:
+    value = _metric_float(metrics, key, default=float(default) if default is not None else None)
+    if value is None:
+        return None
+    return int(value)
 
 
 def _read_manifest(path: Path) -> dict[str, Any]:
@@ -1981,10 +2009,8 @@ def _feature_artifact_paths(paths: list[str]) -> dict[str, str]:
     }
 
 
-def _validate_batch_inputs(*, symbol: str, windows: list[BatchWindow]) -> None:
-    if symbol != "BTCUSDT":
-        msg = "crypto batch runner is scoped to BTCUSDT only"
-        raise ValueError(msg)
+def _validate_batch_inputs(*, symbol: str, windows: list[BatchWindow]) -> str:
+    normalized_symbol = normalize_crypto_research_symbol(symbol)
     if not windows:
         msg = "at least one batch window is required"
         raise ValueError(msg)
@@ -1998,6 +2024,7 @@ def _validate_batch_inputs(*, symbol: str, windows: list[BatchWindow]) -> None:
         if end <= start:
             msg = f"batch window end must be after start: {window.label}"
             raise ValueError(msg)
+    return normalized_symbol
 
 
 def _cached_public_download(
@@ -2059,6 +2086,7 @@ def _batch_id(
     exposure_profile: str = "none",
     exposure_settings: dict[str, Any] | None = None,
     cost_model_settings: dict[str, Any] | None = None,
+    symbol: str = DEFAULT_CRYPTO_RESEARCH_SYMBOL,
     bad_regime_diagnostics_enabled: bool = False,
     forward_path_diagnostics_enabled: bool = False,
     path_risk_diagnostics_enabled: bool = False,
@@ -2087,7 +2115,7 @@ def _batch_id(
         "bad_regime_diagnostics_enabled": bad_regime_diagnostics_enabled,
         "forward_path_diagnostics_enabled": forward_path_diagnostics_enabled,
         "path_risk_diagnostics_enabled": path_risk_diagnostics_enabled,
-        "symbol": "BTCUSDT",
+        "symbol": symbol,
         "source": "bybit_public",
         "execution_timeframe": "M15",
     }
