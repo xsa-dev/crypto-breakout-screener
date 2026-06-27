@@ -570,6 +570,10 @@ class BacktestEngine:
             exit_metadata["exit_profile_trailing_giveback_atr"] = float(
                 exit_profile["trailing_giveback_atr"]
             )
+        if exit_profile["close_stop_atr"] is not None:
+            exit_metadata["exit_profile_close_stop_atr"] = float(exit_profile["close_stop_atr"])
+        if exit_profile["close_target_atr"] is not None:
+            exit_metadata["exit_profile_close_target_atr"] = float(exit_profile["close_target_atr"])
         return BacktestTrade(
             trade_id=trade_id,
             symbol=current["symbol"],
@@ -618,6 +622,8 @@ class BacktestEngine:
                 profile.breakeven_after_atr,
                 profile.trailing_after_atr,
                 profile.trailing_giveback_atr,
+                profile.close_stop_atr,
+                profile.close_target_atr,
             )
         )
         if not requires_atr:
@@ -638,12 +644,24 @@ class BacktestEngine:
             if profile.trailing_after_atr is not None
             else None
         )
+        close_stop_price = (
+            entry_price - float(profile.close_stop_atr) * atr_value
+            if profile.close_stop_atr is not None
+            else None
+        )
+        close_target_price = (
+            entry_price + float(profile.close_target_atr) * atr_value
+            if profile.close_target_atr is not None
+            else None
+        )
         breakeven_active = False
         trailing_active = False
         trailing_high: float | None = None
         for offset, bar in enumerate(bars[: profile.fixed_holding_bars], start=1):
             if stop_price is not None and bar["low"] <= stop_price:
                 return bar, stop_price, offset, "atr_stop"
+            if close_stop_price is not None and bar["close"] <= close_stop_price:
+                return bar, bar["close"], offset, "close_atr_stop"
             if breakeven_active and bar["low"] <= entry_price:
                 return bar, entry_price, offset, "breakeven_exit"
             if trailing_active:
@@ -656,6 +674,8 @@ class BacktestEngine:
                 trailing_high = max(trailing_high or bar["high"], bar["high"])
             if target_price is not None and bar["high"] >= target_price:
                 return bar, target_price, offset, "atr_target"
+            if close_target_price is not None and bar["close"] >= close_target_price:
+                return bar, bar["close"], offset, "close_atr_target"
             if breakeven_activation is not None and bar["high"] >= breakeven_activation:
                 breakeven_active = True
             if trailing_activation is not None and bar["high"] >= trailing_activation:

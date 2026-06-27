@@ -391,6 +391,13 @@ def test_batch_runner_records_exit_profile(tmp_path) -> None:
         "fixed_holding_bars": 32,
     }
 
+    close_stop_profile = "conservative-v1-m15-slope-positive-max-trades-8-close-stop-0p5-close-target-2p0-hold-16"
+    assert exit_profile_config(close_stop_profile).model_dump(mode="json", exclude_none=True) == {
+        "fixed_holding_bars": 16,
+        "close_stop_atr": 0.5,
+        "close_target_atr": 2.0,
+    }
+
 
 def test_batch_runner_passes_and_records_cost_model_settings(tmp_path) -> None:
     windows = [

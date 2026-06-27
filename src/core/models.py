@@ -474,6 +474,8 @@ class BacktestExitProfileConfig(BaseModel):
     breakeven_after_atr: float | None = Field(default=None, gt=0)
     trailing_after_atr: float | None = Field(default=None, gt=0)
     trailing_giveback_atr: float | None = Field(default=None, gt=0)
+    close_stop_atr: float | None = Field(default=None, gt=0)
+    close_target_atr: float | None = Field(default=None, gt=0)
 
     @property
     def configured(self) -> bool:
@@ -484,6 +486,8 @@ class BacktestExitProfileConfig(BaseModel):
             or self.breakeven_after_atr is not None
             or self.trailing_after_atr is not None
             or self.trailing_giveback_atr is not None
+            or self.close_stop_atr is not None
+            or self.close_target_atr is not None
         )
 
     @model_validator(mode="after")
