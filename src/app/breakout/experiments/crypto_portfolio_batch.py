@@ -66,6 +66,11 @@ class PortfolioTrade(BaseModel):
     algorithmic_score_bucket: AlgorithmicEligibilityBucket | None = None
     algorithmic_score_rejection_reasons: list[str] = Field(default_factory=list)
     algorithmic_score_unavailable_components: list[str] = Field(default_factory=list)
+    selection_bucket: str | None = None
+    selection_rank: int | None = None
+    selection_rank_score: int | None = None
+    selection_relative_strength_rank: float | None = None
+    selection_relative_friction: float | None = None
     furthest_lifecycle_state: str = "unavailable"
     lifecycle_state_counts: dict[str, int] = Field(default_factory=dict)
     source_trade_id: str | None = None
@@ -101,6 +106,7 @@ class PortfolioWindowSummary(BaseModel):
     skipped_exposure_trade_count: int = 0
     selection_skip_counts: dict[str, int] = Field(default_factory=dict)
     selection_score_distribution: dict[str, int] = Field(default_factory=dict)
+    selection_rank_distribution: dict[str, int] = Field(default_factory=dict)
     lifecycle_state_counts: dict[str, int] = Field(default_factory=dict)
     net_profit: float = 0.0
     max_drawdown: float | None = None
@@ -682,6 +688,7 @@ def _portfolio_window_summary(
         skipped_exposure_trade_count=skipped_count,
         selection_skip_counts=selection_skip_counts,
         selection_score_distribution=selection_score_distribution,
+        selection_rank_distribution=_selection_rank_distribution(accepted),
         lifecycle_state_counts=_trade_lifecycle_state_counts(accepted),
         net_profit=net_profit,
         max_drawdown=max_drawdown,
@@ -712,6 +719,16 @@ def _apply_exposure_caps(
     spread: float = 1.0,
     slippage: float = 0.5,
 ) -> list[PortfolioTrade]:
+    if selection_profile == "top-n-score-v1":
+        return _apply_topn_exposure_caps(
+            trades,
+            max_trade_notional=max_trade_notional,
+            max_total_open_notional=max_total_open_notional,
+            selection_settings=selection_settings or {},
+            spread=spread,
+            slippage=slippage,
+        )
+
     accepted: list[PortfolioTrade] = []
     open_trades: list[PortfolioTrade] = []
     active_selection_settings = selection_settings or {}
@@ -755,6 +772,78 @@ def _apply_exposure_caps(
     return accepted
 
 
+def _apply_topn_exposure_caps(
+    trades: list[PortfolioTrade],
+    *,
+    max_trade_notional: float,
+    max_total_open_notional: float,
+    selection_settings: dict[str, Any],
+    spread: float,
+    slippage: float,
+) -> list[PortfolioTrade]:
+    accepted: list[PortfolioTrade] = []
+    open_trades: list[PortfolioTrade] = []
+    max_selected_per_bucket = int(selection_settings.get("max_selected_per_bucket", 1))
+    for bucket_time, bucket in _topn_buckets(trades):
+        open_trades = [item for item in open_trades if item.exit_time > bucket_time]
+        current_open = sum(item.notional for item in open_trades if item.accepted)
+        selected_in_bucket = 0
+        for trade in _rank_topn_bucket(
+            bucket, bucket_time=bucket_time, spread=spread, slippage=slippage
+        ):
+            if not trade.accepted:
+                accepted.append(trade)
+                continue
+            if trade.regime_decision != "long_enabled":
+                accepted.append(
+                    trade.model_copy(
+                        update={"accepted": False, "blocker": f"portfolio_regime_{trade.regime_label}"}
+                    )
+                )
+                continue
+            selection_blocker = _portfolio_selection_blocker(
+                trade,
+                selection_profile="top-n-score-v1",
+                selection_settings=selection_settings,
+                spread=spread,
+                slippage=slippage,
+            )
+            if selection_blocker is not None:
+                accepted.append(trade.model_copy(update={"accepted": False, "blocker": selection_blocker}))
+                continue
+            if selected_in_bucket >= max_selected_per_bucket:
+                accepted.append(
+                    trade.model_copy(
+                        update={
+                            "accepted": False,
+                            "blocker": "portfolio_selection_rank_not_selected",
+                        }
+                    )
+                )
+                continue
+            original_notional = trade.notional or max_trade_notional
+            capped_notional = min(original_notional, max_trade_notional)
+            if current_open + capped_notional > max_total_open_notional:
+                accepted.append(
+                    trade.model_copy(
+                        update={
+                            "accepted": False,
+                            "blocker": "portfolio_selection_rank_not_selected",
+                        }
+                    )
+                )
+                continue
+            scale = capped_notional / original_notional if original_notional > 0 else 1.0
+            adjusted = trade.model_copy(
+                update={"notional": capped_notional, "net_pnl": trade.net_pnl * scale}
+            )
+            accepted.append(adjusted)
+            open_trades.append(adjusted)
+            current_open += capped_notional
+            selected_in_bucket += 1
+    return accepted
+
+
 def _selection_settings(selection_profile: str) -> dict[str, Any]:
     if selection_profile == "none":
         return {}
@@ -775,6 +864,17 @@ def _selection_settings(selection_profile: str) -> dict[str, Any]:
                 "multi_timeframe_trend": 5,
             },
         }
+    if selection_profile == "top-n-score-v1":
+        return {
+            "max_selected_per_bucket": 1,
+            "min_total_score": 70,
+            "ranking_keys": [
+                "algorithmic_score_desc",
+                "relative_strength_rank_desc",
+                "relative_friction_asc",
+                "symbol_asc",
+            ],
+        }
     msg = f"unsupported portfolio selection profile: {selection_profile}"
     raise ValueError(msg)
 
@@ -789,11 +889,15 @@ def _portfolio_selection_blocker(
 ) -> str | None:
     if selection_profile == "none":
         return None
-    if selection_profile == "algorithmic-breakout-score-v1":
+    if selection_profile in {"algorithmic-breakout-score-v1", "top-n-score-v1"}:
         if trade.algorithmic_score_total is None or trade.algorithmic_score_bucket is None:
             return "portfolio_selection_algorithmic_score_unavailable"
         if trade.algorithmic_score_bucket == "blocked":
             return "portfolio_selection_algorithmic_score_below_threshold"
+        if selection_profile == "top-n-score-v1" and trade.selection_relative_strength_rank is None:
+            return "portfolio_selection_ranking_value_unavailable"
+        if selection_profile == "top-n-score-v1" and trade.selection_relative_friction is None:
+            return "portfolio_selection_missing_price"
         return None
     if selection_profile != "cost-feasible-v1":
         msg = f"unsupported portfolio selection profile: {selection_profile}"
@@ -805,6 +909,88 @@ def _portfolio_selection_blocker(
     if round_trip_friction / trade.entry_price > max_ratio:
         return "portfolio_selection_cost_feasibility"
     return None
+
+
+def _topn_buckets(trades: list[PortfolioTrade]) -> list[tuple[datetime, list[PortfolioTrade]]]:
+    buckets: dict[datetime, list[PortfolioTrade]] = {}
+    skipped: list[PortfolioTrade] = []
+    for trade in trades:
+        if trade.accepted:
+            buckets.setdefault(trade.entry_time, []).append(trade)
+        else:
+            skipped.append(trade)
+    output = [(bucket_time, buckets[bucket_time]) for bucket_time in sorted(buckets)]
+    for trade in skipped:
+        output.append((trade.entry_time, [trade]))
+    return output
+
+
+def _rank_topn_bucket(
+    trades: list[PortfolioTrade], *, bucket_time: datetime, spread: float, slippage: float
+) -> list[PortfolioTrade]:
+    ranked = sorted(
+        trades,
+        key=lambda trade: _topn_sort_key(trade, spread=spread, slippage=slippage),
+    )
+    output: list[PortfolioTrade] = []
+    bucket = bucket_time.isoformat()
+    for index, trade in enumerate(ranked, start=1):
+        relative_friction = _relative_friction(trade, spread=spread, slippage=slippage)
+        output.append(
+            trade.model_copy(
+                update={
+                    "selection_bucket": bucket,
+                    "selection_rank": index,
+                    "selection_rank_score": trade.algorithmic_score_total,
+                    "selection_relative_strength_rank": _relative_strength_rank(trade),
+                    "selection_relative_friction": relative_friction,
+                }
+            )
+        )
+    return output
+
+
+def _topn_sort_key(
+    trade: PortfolioTrade, *, spread: float, slippage: float
+) -> tuple[datetime, int, float, float, str, str]:
+    score = trade.algorithmic_score_total if trade.algorithmic_score_total is not None else -1
+    relative_strength = _relative_strength_rank(trade)
+    friction = _relative_friction(trade, spread=spread, slippage=slippage)
+    return (
+        trade.entry_time,
+        -score,
+        -(relative_strength if relative_strength is not None else -999999.0),
+        friction if friction is not None else 999999.0,
+        trade.symbol,
+        trade.source_trade_id or "",
+    )
+
+
+def _relative_strength_rank(trade: PortfolioTrade) -> float | None:
+    value = trade.algorithmic_score_components.get("relative_strength")
+    if value is None:
+        return None
+    return float(value)
+
+
+def _relative_friction(trade: PortfolioTrade, *, spread: float, slippage: float) -> float | None:
+    if trade.entry_price <= 0:
+        return None
+    return (spread + (2.0 * slippage)) / trade.entry_price
+
+
+def _selection_rank_distribution(trades: list[PortfolioTrade]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for trade in trades:
+        if trade.selection_rank is None:
+            continue
+        if not trade.accepted and (
+            trade.blocker is None or not trade.blocker.startswith("portfolio_selection_")
+        ):
+            continue
+        key = "selected" if trade.accepted else trade.blocker or "not_selected"
+        counts[key] = counts.get(key, 0) + 1
+    return counts
 
 
 def _selection_skip_counts(trades: list[PortfolioTrade]) -> dict[str, int]:
@@ -1374,6 +1560,7 @@ def _write_portfolio_scorecard(path: Path, windows: list[PortfolioWindowSummary]
             "skipped_exposure_trade_count",
             "selection_skip_counts_json",
             "selection_score_distribution_json",
+            "selection_rank_distribution_json",
             "lifecycle_state_counts_json",
             "net_profit",
             "net_profit_buffer",
@@ -1397,6 +1584,9 @@ def _write_portfolio_scorecard(path: Path, windows: list[PortfolioWindowSummary]
                 ),
                 "selection_score_distribution_json": json.dumps(
                     window.selection_score_distribution, sort_keys=True, ensure_ascii=False
+                ),
+                "selection_rank_distribution_json": json.dumps(
+                    window.selection_rank_distribution, sort_keys=True, ensure_ascii=False
                 ),
                 "lifecycle_state_counts_json": json.dumps(
                     window.lifecycle_state_counts, sort_keys=True, ensure_ascii=False
@@ -1453,6 +1643,11 @@ def _write_portfolio_trades(path: Path, trades: list[PortfolioTrade]) -> None:
             "algorithmic_score_bucket",
             "algorithmic_score_rejection_reasons",
             "algorithmic_score_unavailable_components",
+            "selection_bucket",
+            "selection_rank",
+            "selection_rank_score",
+            "selection_relative_strength_rank",
+            "selection_relative_friction",
             "furthest_lifecycle_state",
             "lifecycle_state_counts",
             "source_trade_id",
@@ -1559,7 +1754,12 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-total-open-notional", type=float, default=3_000.0)
     parser.add_argument(
         "--selection-profile",
-        choices=["none", "cost-feasible-v1", "algorithmic-breakout-score-v1"],
+        choices=[
+            "none",
+            "cost-feasible-v1",
+            "algorithmic-breakout-score-v1",
+            "top-n-score-v1",
+        ],
         default="none",
     )
     parser.add_argument("--spread", type=float, default=1.0)

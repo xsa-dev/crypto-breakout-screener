@@ -1449,6 +1449,90 @@ def test_portfolio_algorithmic_score_selection_blocks_weak_candidates(tmp_path) 
     assert "cost_feasibility" in blocked["algorithmic_score_components"]
 
 
+def test_portfolio_topn_selection_prefers_higher_score_candidate(tmp_path) -> None:
+    windows = [
+        BatchWindow(
+            label="portfolio",
+            start=datetime(2024, 1, 1, tzinfo=UTC),
+            end=datetime(2024, 1, 2, tzinfo=UTC),
+        )
+    ]
+    result = run_portfolio_batch_experiment(
+        windows=windows,
+        universe="ethusdt-only",
+        symbols=("ETHUSDT", "SOLUSDT"),
+        output_dir=tmp_path / "portfolio",
+        market_data_dir=tmp_path / "market-data",
+        gate_profile="conservative-v1-m15-slope-positive-max-trades-8-target-4p0-hold-32",
+        selection_profile="top-n-score-v1",
+        max_total_open_notional=2_000.0,
+        run_symbol_batch=_fake_symbol_batch_factory(
+            tmp_path,
+            symbol_algorithmic_features={
+                "ETHUSDT": {
+                    "feature_volume_ratio": "1.0",
+                    "feature_breakout_distance_atr": "2.0",
+                }
+            },
+        ),
+    )
+
+    window = result.summary.windows[0]
+    assert result.summary.selection_profile == "top-n-score-v1"
+    assert result.summary.selection_settings["max_selected_per_bucket"] == 1
+    assert window.accepted_trade_count == 1
+    assert window.net_profit == 100.0
+    assert window.selection_skip_counts == {"portfolio_selection_rank_not_selected": 1}
+    assert window.selection_rank_distribution == {
+        "selected": 1,
+        "portfolio_selection_rank_not_selected": 1,
+    }
+
+    with Path(window.trade_csv_path or "").open(newline="", encoding="utf-8") as file:
+        trade_rows = list(csv.DictReader(file))
+    active_rows = [row for row in trade_rows if row["source_trade_id"]]
+    assert [(row["symbol"], row["accepted"], row["blocker"]) for row in active_rows] == [
+        ("SOLUSDT", "True", ""),
+        ("ETHUSDT", "False", "portfolio_selection_rank_not_selected"),
+    ]
+    assert active_rows[0]["selection_rank"] == "1"
+    assert active_rows[1]["selection_rank"] == "2"
+    assert active_rows[0]["selection_rank_score"] > active_rows[1]["selection_rank_score"]
+
+
+def test_portfolio_topn_selection_uses_stable_tie_breaker(tmp_path) -> None:
+    windows = [
+        BatchWindow(
+            label="portfolio",
+            start=datetime(2024, 1, 1, tzinfo=UTC),
+            end=datetime(2024, 1, 2, tzinfo=UTC),
+        )
+    ]
+    result = run_portfolio_batch_experiment(
+        windows=windows,
+        universe="ethusdt-only",
+        symbols=("SOLUSDT", "ETHUSDT"),
+        output_dir=tmp_path / "portfolio",
+        market_data_dir=tmp_path / "market-data",
+        gate_profile="conservative-v1-m15-slope-positive-max-trades-8-target-4p0-hold-32",
+        selection_profile="top-n-score-v1",
+        max_total_open_notional=2_000.0,
+        run_symbol_batch=_fake_symbol_batch_factory(tmp_path),
+    )
+
+    window = result.summary.windows[0]
+    with Path(window.trade_csv_path or "").open(newline="", encoding="utf-8") as file:
+        trade_rows = list(csv.DictReader(file))
+    active_rows = [row for row in trade_rows if row["source_trade_id"]]
+    assert [(row["symbol"], row["selection_rank"]) for row in active_rows] == [
+        ("ETHUSDT", "1"),
+        ("SOLUSDT", "2"),
+    ]
+    assert active_rows[0]["accepted"] == "True"
+    assert active_rows[1]["accepted"] == "False"
+    assert active_rows[1]["blocker"] == "portfolio_selection_rank_not_selected"
+
+
 def test_portfolio_quarter_diagnostics_serialize_mixed_statuses_and_unavailable_fields(
     tmp_path,
 ) -> None:
