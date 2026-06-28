@@ -13,6 +13,7 @@ from src.core.models import (
     ContextFilterConfig,
     FeatureVector,
     LevelDetectionConfig,
+    SetupConfig,
 )
 from src.core.schemas import Bar, OrderBookLevel
 
@@ -220,6 +221,92 @@ def test_setup_feature_calculation_and_scenario_priority() -> None:
     assert features.adx is not None
     assert features.density_supports_breakout is True
     assert scenario is ScenarioType.CONSOLIDATION_BREAKOUT
+
+
+def test_ohlcv_density_proxy_is_scale_invariant_and_reports_source() -> None:
+    evaluator = SetupEvaluator()
+
+    def scaled_bars(symbol: str, scale: float) -> list[Bar]:
+        bars: list[Bar] = []
+        for index in range(20):
+            base = (100.0 + index * 0.02) * scale
+            bar = make_bar(
+                index,
+                high=base + 0.5 * scale,
+                low=base - 0.5 * scale,
+                close=base + 0.35 * scale,
+            )
+            bars.append(
+                Bar(
+                    **{
+                        **bar,
+                        "symbol": symbol,
+                        "open": base - 0.25 * scale,
+                        "volume": 100.0 + index,
+                    }
+                )
+            )
+        return bars
+
+    low_price = evaluator.calculate_features(scaled_bars("LOWUSDT", 1.0), level_price=100.0)
+    high_price = evaluator.calculate_features(scaled_bars("HIGHUSDT", 100.0), level_price=10_000.0)
+
+    assert low_price.density_source == "ohlcv_proxy"
+    assert high_price.density_source == "ohlcv_proxy"
+    assert low_price.normalized_threshold_mode == "rolling_percentiles"
+    assert low_price.missing_feature_blockers == []
+    assert high_price.missing_feature_blockers == []
+    assert low_price.body_dominance == pytest.approx(high_price.body_dominance)
+    assert low_price.wick_rejection == pytest.approx(high_price.wick_rejection)
+    assert low_price.close_location_quality == pytest.approx(high_price.close_location_quality)
+    assert low_price.relative_volume_expansion == pytest.approx(high_price.relative_volume_expansion)
+    score = evaluator.score(low_price)
+    assert score.density_source == "ohlcv_proxy"
+    assert score.density_proxy_components["body_dominance"] == pytest.approx(
+        low_price.body_dominance
+    )
+    assert score.normalized_threshold_mode == "rolling_percentiles"
+
+
+def test_ohlcv_density_proxy_is_side_aware_for_body_wick_and_close_quality() -> None:
+    evaluator = SetupEvaluator()
+    bars = [make_bar(index, high=100.4, low=99.6, close=100.0) for index in range(19)]
+    breakout = Bar(
+        **{
+            **make_bar(19, high=101.0, low=99.0, close=100.8),
+            "open": 99.1,
+            "volume": 180.0,
+        }
+    )
+    long_features = evaluator.calculate_features([*bars, breakout], level_price=100.0, side=Side.LONG)
+    short_features = evaluator.calculate_features([*bars, breakout], level_price=100.0, side=Side.SHORT)
+
+    assert long_features.body_dominance == pytest.approx(0.85)
+    assert long_features.close_location_quality is not None
+    assert short_features.close_location_quality is not None
+    assert long_features.wick_rejection is not None
+    assert short_features.wick_rejection is not None
+    assert long_features.close_location_quality > short_features.close_location_quality
+    assert long_features.wick_rejection > short_features.wick_rejection
+
+
+def test_calibration_artifact_blocks_when_window_reaches_candidate_time() -> None:
+    bars = [make_bar(index, high=101.0, low=99.0, close=100.0) for index in range(20)]
+    config = SetupConfig(
+        normalization_mode="calibration_artifact",
+        calibration_artifact_path="artifacts/calibration/BTCUSDT.json",
+        calibration_window_start=bars[0]["ts"],
+        calibration_window_end=bars[-1]["ts"],
+    )
+    evaluator = SetupEvaluator(setup_config=config)
+
+    features = evaluator.calculate_features(bars, level_price=100.0)
+    score = evaluator.score(features)
+
+    assert features.calibration_artifact_path == "artifacts/calibration/BTCUSDT.json"
+    assert features.missing_feature_blockers == ["calibration_window_not_closed_before_candidate"]
+    assert score.eligibility == "blocked"
+    assert "calibration_window_not_closed_before_candidate" in score.rejection_reasons
 
 
 def test_setup_score_is_side_symmetric_for_trend() -> None:

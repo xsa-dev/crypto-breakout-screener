@@ -1,6 +1,7 @@
 """Setup scoring for the breakout strategy foundation."""
 
-from typing import Literal
+import statistics
+from typing import Literal, cast
 
 from src.core.enums import ScenarioType, Side
 from src.core.models import (
@@ -15,6 +16,10 @@ from src.core.models import (
 from src.core.schemas import Bar, OrderBookLevel
 
 Eligibility = Literal["normal", "reduced", "blocked"]
+
+
+def _score_component_value(value: float | None) -> float | str:
+    return value if value is not None else "unavailable"
 
 
 class SetupEvaluator:
@@ -38,6 +43,7 @@ class SetupEvaluator:
         bars: list[Bar],
         *,
         order_book: list[OrderBookLevel] | None = None,
+        level_price: float | None = None,
         side: Side = Side.LONG,
     ) -> FeatureVector:
         """Calculate ATR/EMA/ADX and setup features from closed canonical bars."""
@@ -54,6 +60,13 @@ class SetupEvaluator:
         activity_ratio = self._activity_ratio(volumes)
         density_available = bool(order_book)
         density_supports_breakout = self._density_supports(order_book or [], side=side)
+        proxy = self._ohlcv_density_proxy(
+            ordered,
+            atr=atr,
+            level_price=level_price if level_price is not None else ordered[-1]["close"],
+            side=side,
+        )
+        calibration_blockers = self._calibration_blockers(ordered)
 
         return FeatureVector(
             symbol=ordered[-1]["symbol"],
@@ -67,6 +80,23 @@ class SetupEvaluator:
             activity_ratio=activity_ratio,
             density_available=density_available,
             density_supports_breakout=density_supports_breakout if density_available else None,
+            density_source="dom"
+            if density_available
+            else cast(Literal["ohlcv_proxy", "unavailable"], proxy["density_source"]),
+            volume_near_level=cast(float | None, proxy["volume_near_level"]),
+            relative_volume_expansion=cast(float | None, proxy["relative_volume_expansion"]),
+            body_dominance=cast(float | None, proxy["body_dominance"]),
+            wick_rejection=cast(float | None, proxy["wick_rejection"]),
+            close_location_quality=cast(float | None, proxy["close_location_quality"]),
+            absorption_or_hold_proxy=cast(float | None, proxy["absorption_or_hold_proxy"]),
+            normalized_threshold_mode=self.setup_config.normalization_mode,
+            calibration_artifact_path=self.setup_config.calibration_artifact_path,
+            calibration_window_start=self.setup_config.calibration_window_start,
+            calibration_window_end=self.setup_config.calibration_window_end,
+            missing_feature_blockers=[
+                *cast(list[str], proxy["missing_feature_blockers"]),
+                *calibration_blockers,
+            ],
         )
 
     def score(
@@ -92,6 +122,9 @@ class SetupEvaluator:
         )
         eligibility = "blocked" if hard_blocked else self.eligibility(total)
         rejection_reasons = context_reasons
+        if features.missing_feature_blockers:
+            eligibility = "blocked"
+            rejection_reasons = [*rejection_reasons, *features.missing_feature_blockers]
         if eligibility == "blocked" and total < self.config.threshold_reduced:
             rejection_reasons = [*rejection_reasons, "score_too_low"]
 
@@ -105,6 +138,18 @@ class SetupEvaluator:
             trend=trend,
             activity=activity,
             density=density,
+            density_source=features.density_source,
+            density_proxy_components={
+                "volume_near_level": _score_component_value(features.volume_near_level),
+                "relative_volume_expansion": _score_component_value(features.relative_volume_expansion),
+                "body_dominance": _score_component_value(features.body_dominance),
+                "wick_rejection": _score_component_value(features.wick_rejection),
+                "close_location_quality": _score_component_value(features.close_location_quality),
+                "absorption_or_hold_proxy": _score_component_value(features.absorption_or_hold_proxy),
+            },
+            normalized_threshold_mode=features.normalized_threshold_mode,
+            calibration_artifact_path=features.calibration_artifact_path,
+            missing_feature_blockers=list(features.missing_feature_blockers),
             eligibility=eligibility,
             rejection_reasons=rejection_reasons,
         )
@@ -197,9 +242,124 @@ class SetupEvaluator:
         return 0
 
     def _score_density(self, features: FeatureVector) -> int:
-        if not features.density_available:
+        if features.density_source == "dom" or (
+            features.density_available and features.density_source == "unavailable"
+        ):
+            return self.config.weight_density if features.density_supports_breakout else 0
+        proxy_values = [
+            features.volume_near_level,
+            features.relative_volume_expansion,
+            features.body_dominance,
+            features.wick_rejection,
+            features.close_location_quality,
+            features.absorption_or_hold_proxy,
+        ]
+        if features.density_source != "ohlcv_proxy" or any(value is None for value in proxy_values):
             return 0
-        return self.config.weight_density if features.density_supports_breakout else 0
+        normalized_relative_volume = min(float(features.relative_volume_expansion or 0.0) / 1.5, 1.0)
+        normalized_volume_near_level = min(float(features.volume_near_level or 0.0), 1.0)
+        average = statistics.fmean(
+            [
+                normalized_volume_near_level,
+                normalized_relative_volume,
+                float(features.body_dominance or 0.0),
+                float(features.wick_rejection or 0.0),
+                float(features.close_location_quality or 0.0),
+                float(features.absorption_or_hold_proxy or 0.0),
+            ]
+        )
+        return round(self.config.weight_density * average)
+
+    def _ohlcv_density_proxy(
+        self,
+        bars: list[Bar],
+        *,
+        atr: float,
+        level_price: float,
+        side: Side,
+    ) -> dict[str, object]:
+        missing: list[str] = []
+        if atr <= 0:
+            return self._missing_density_proxy("missing_density_proxy_atr")
+        lookback = self.setup_config.density_proxy_lookback_bars
+        window = bars[-lookback:]
+        if len(window) < 3:
+            return self._missing_density_proxy("missing_density_proxy_history")
+        tolerance = self.setup_config.density_level_tolerance_atr * atr
+        near_level = [
+            bar
+            for bar in window
+            if bar["low"] - tolerance <= level_price <= bar["high"] + tolerance
+        ]
+        total_volume = sum(max(0.0, bar["volume"]) for bar in window)
+        if total_volume <= 0:
+            return self._missing_density_proxy("missing_density_proxy_volume")
+        current = bars[-1]
+        current_range = current["high"] - current["low"]
+        if current_range <= 0:
+            return self._missing_density_proxy("missing_density_proxy_candle_range")
+        baseline_volumes = [bar["volume"] for bar in window[:-1] if bar["volume"] > 0]
+        if not baseline_volumes:
+            missing.append("missing_density_proxy_volume_baseline")
+        baseline_volume = statistics.median(baseline_volumes) if baseline_volumes else 0.0
+        body = abs(current["close"] - current["open"])
+        upper_wick = current["high"] - max(current["open"], current["close"])
+        lower_wick = min(current["open"], current["close"]) - current["low"]
+        adverse_wick = lower_wick if side is Side.LONG else upper_wick
+        close_location = (current["close"] - current["low"]) / current_range
+        if side is Side.SHORT:
+            close_location = (current["high"] - current["close"]) / current_range
+        hold_score = self._absorption_or_hold_proxy(window, level_price=level_price, tolerance=tolerance, side=side)
+        return {
+            "density_source": "ohlcv_proxy" if not missing else "unavailable",
+            "volume_near_level": sum(max(0.0, bar["volume"]) for bar in near_level) / total_volume,
+            "relative_volume_expansion": current["volume"] / baseline_volume if baseline_volume > 0 else None,
+            "body_dominance": min(max(body / current_range, 0.0), 1.0),
+            "wick_rejection": min(max(1.0 - max(0.0, adverse_wick) / current_range, 0.0), 1.0),
+            "close_location_quality": min(max(close_location, 0.0), 1.0),
+            "absorption_or_hold_proxy": hold_score,
+            "missing_feature_blockers": missing,
+        }
+
+    def _missing_density_proxy(self, reason: str) -> dict[str, object]:
+        return {
+            "density_source": "unavailable",
+            "volume_near_level": None,
+            "relative_volume_expansion": None,
+            "body_dominance": None,
+            "wick_rejection": None,
+            "close_location_quality": None,
+            "absorption_or_hold_proxy": None,
+            "missing_feature_blockers": [reason],
+        }
+
+    def _absorption_or_hold_proxy(
+        self,
+        bars: list[Bar],
+        *,
+        level_price: float,
+        tolerance: float,
+        side: Side,
+    ) -> float:
+        tests = [bar for bar in bars if bar["low"] - tolerance <= level_price <= bar["high"] + tolerance]
+        if not tests:
+            return 0.0
+        holds = 0
+        for bar in tests:
+            if side is Side.LONG and bar["close"] >= level_price - tolerance:
+                holds += 1
+            if side is Side.SHORT and bar["close"] <= level_price + tolerance:
+                holds += 1
+        return min(holds / max(3, len(tests)), 1.0)
+
+    def _calibration_blockers(self, bars: list[Bar]) -> list[str]:
+        if self.setup_config.normalization_mode != "calibration_artifact":
+            return []
+        if self.setup_config.calibration_window_end is None:
+            return ["missing_calibration_window_end"]
+        if bars[-1]["ts"] <= self.setup_config.calibration_window_end:
+            return ["calibration_window_not_closed_before_candidate"]
+        return []
 
     def _atr(self, bars: list[Bar], period: int) -> float:
         ranges: list[float] = []

@@ -419,7 +419,9 @@ class BacktestEngine:
         if not pivot_highs:
             return None
         level = pivot_highs[-1]
-        features = self.setup_evaluator.calculate_features(list(history), side=Side.LONG)
+        features = self.setup_evaluator.calculate_features(
+            list(history), level_price=level.price, side=Side.LONG
+        )
         score = self.setup_evaluator.score(features, side=Side.LONG)
         feature_snapshot = self._entry_feature_snapshot(
             history=history,
@@ -1088,6 +1090,34 @@ class BacktestEngine:
             "feature_consolidation_range_atr": _value_or_unavailable(getattr(features, "consolidation_range_atr", None)),
             "feature_approach_velocity": _value_or_unavailable(getattr(features, "approach_velocity", None)),
             "feature_activity_ratio": _value_or_unavailable(getattr(features, "activity_ratio", None)),
+            "feature_density_source": str(getattr(features, "density_source", "unavailable")),
+            "feature_density_volume_near_level": _value_or_unavailable(
+                getattr(features, "volume_near_level", None)
+            ),
+            "feature_density_relative_volume_expansion": _value_or_unavailable(
+                getattr(features, "relative_volume_expansion", None)
+            ),
+            "feature_density_body_dominance": _value_or_unavailable(
+                getattr(features, "body_dominance", None)
+            ),
+            "feature_density_wick_rejection": _value_or_unavailable(
+                getattr(features, "wick_rejection", None)
+            ),
+            "feature_density_close_location_quality": _value_or_unavailable(
+                getattr(features, "close_location_quality", None)
+            ),
+            "feature_density_absorption_or_hold_proxy": _value_or_unavailable(
+                getattr(features, "absorption_or_hold_proxy", None)
+            ),
+            "feature_density_missing_blockers": ";".join(
+                getattr(features, "missing_feature_blockers", [])
+            ),
+            "feature_normalized_threshold_mode": str(
+                getattr(features, "normalized_threshold_mode", "rolling_percentiles")
+            ),
+            "feature_calibration_artifact_path": str(
+                getattr(features, "calibration_artifact_path", "") or ""
+            ),
             "feature_ema_fast_distance_atr": _ratio_or_unavailable(current["close"] - getattr(features, "ema_fast", 0.0), atr)
             if getattr(features, "ema_fast", None) is not None
             else "unavailable",
@@ -2345,6 +2375,7 @@ def build_report(
     parameter_snapshot = config.model_dump(mode="json")
     parameter_snapshot["research_gate_skip_counts"] = dict(sorted((gate_skip_counts or {}).items()))
     parameter_snapshot["heikin_ashi_feature_usage"] = _heikin_ashi_usage_snapshot(config)
+    parameter_snapshot["normalization_density_assumptions"] = _normalization_density_snapshot(trades)
     parameter_snapshot["exit_profile_counts"] = dict(
         sorted(Counter(str(trade.metadata.get("exit_reason", "unknown")) for trade in trades).items())
     )
@@ -2411,6 +2442,39 @@ def build_report(
         path_risk_threshold_summary=path_risk_summaries,
         lifecycle_state_audit=lifecycle_rows,
     )
+
+
+def _normalization_density_snapshot(trades: Sequence[BacktestTrade]) -> dict[str, object]:
+    """Summarize normalized-threshold and density-source disclosure for reports."""
+
+    threshold_modes = Counter(
+        str(trade.metadata.get("feature_normalized_threshold_mode", "unavailable")) for trade in trades
+    )
+    density_sources = Counter(
+        str(trade.metadata.get("feature_density_source", "unavailable")) for trade in trades
+    )
+    calibration_paths = sorted(
+        {
+            str(path)
+            for trade in trades
+            if (path := trade.metadata.get("feature_calibration_artifact_path"))
+        }
+    )
+    missing_blockers = Counter(
+        blocker
+        for trade in trades
+        for blocker in str(trade.metadata.get("feature_density_missing_blockers", "")).split(";")
+        if blocker
+    )
+    if not trades:
+        density_sources["unavailable"] += 0
+    return {
+        "threshold_mode_counts": dict(sorted(threshold_modes.items())),
+        "density_source_counts": dict(sorted(density_sources.items())),
+        "calibration_artifact_paths": calibration_paths,
+        "missing_feature_blockers": dict(sorted(missing_blockers.items())),
+        "order_book_density_claim": "not_tested_when_density_source_is_ohlcv_proxy_or_unavailable",
+    }
 
 
 def _heikin_ashi_usage_snapshot(config: BacktestConfig) -> dict[str, object]:

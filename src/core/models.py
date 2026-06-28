@@ -39,6 +39,14 @@ class SetupConfig(BaseModel):
     consolidation_max_range_atr: float = Field(default=1.20, gt=0)
     slow_approach_max_velocity: float = Field(default=0.35, ge=0)
     protorgovka_range_percent: tuple[float, float] = Field(default=(0.3, 2.0))
+    density_level_tolerance_atr: float = Field(default=0.25, gt=0)
+    density_proxy_lookback_bars: int = Field(default=20, ge=3)
+    normalization_mode: Literal[
+        "fixed_normalized_defaults", "rolling_percentiles", "calibration_artifact"
+    ] = "rolling_percentiles"
+    calibration_artifact_path: str | None = None
+    calibration_window_start: datetime | None = None
+    calibration_window_end: datetime | None = None
 
     @field_validator("protorgovka_range_percent")
     @classmethod
@@ -48,6 +56,25 @@ class SetupConfig(BaseModel):
             msg = "protorgovka_range_percent must be a positive increasing range"
             raise ValueError(msg)
         return value
+
+    @model_validator(mode="after")
+    def validate_calibration_window(self) -> "SetupConfig":
+        if self.normalization_mode == "calibration_artifact" and not self.calibration_artifact_path:
+            msg = "calibration_artifact_path is required for calibration_artifact normalization"
+            raise ValueError(msg)
+        if self.calibration_artifact_path and (
+            self.calibration_window_start is None or self.calibration_window_end is None
+        ):
+            msg = "calibration window start/end are required when calibration_artifact_path is set"
+            raise ValueError(msg)
+        if (
+            self.calibration_window_start is not None
+            and self.calibration_window_end is not None
+            and self.calibration_window_end <= self.calibration_window_start
+        ):
+            msg = "calibration_window_end must be after calibration_window_start"
+            raise ValueError(msg)
+        return self
 
 
 class TrendFilterConfig(BaseModel):
@@ -181,6 +208,20 @@ class FeatureVector(BaseModel):
     activity_ratio: float | None = Field(default=None, ge=0)
     density_available: bool = False
     density_supports_breakout: bool | None = None
+    density_source: Literal["dom", "ohlcv_proxy", "unavailable"] = "unavailable"
+    volume_near_level: float | None = Field(default=None, ge=0)
+    relative_volume_expansion: float | None = Field(default=None, ge=0)
+    body_dominance: float | None = Field(default=None, ge=0, le=1)
+    wick_rejection: float | None = Field(default=None, ge=0, le=1)
+    close_location_quality: float | None = Field(default=None, ge=0, le=1)
+    absorption_or_hold_proxy: float | None = Field(default=None, ge=0, le=1)
+    normalized_threshold_mode: Literal[
+        "fixed_normalized_defaults", "rolling_percentiles", "calibration_artifact"
+    ] = "rolling_percentiles"
+    calibration_artifact_path: str | None = None
+    calibration_window_start: datetime | None = None
+    calibration_window_end: datetime | None = None
+    missing_feature_blockers: list[str] = Field(default_factory=list)
 
 
 class BreakoutScore(BaseModel):
@@ -195,6 +236,13 @@ class BreakoutScore(BaseModel):
     trend: int = Field(ge=0, le=100)
     activity: int = Field(ge=0, le=100)
     density: int = Field(ge=0, le=100)
+    density_source: Literal["dom", "ohlcv_proxy", "unavailable"] = "unavailable"
+    density_proxy_components: dict[str, float | str] = Field(default_factory=dict)
+    normalized_threshold_mode: Literal[
+        "fixed_normalized_defaults", "rolling_percentiles", "calibration_artifact"
+    ] = "rolling_percentiles"
+    calibration_artifact_path: str | None = None
+    missing_feature_blockers: list[str] = Field(default_factory=list)
     eligibility: Literal["normal", "reduced", "blocked"]
     rejection_reasons: list[str] = Field(default_factory=list)
 

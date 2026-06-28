@@ -246,6 +246,12 @@ def test_report_contains_required_metrics_diagnostics_windows_and_exports(tmp_pa
     with (tmp_path / f"{report.run_id}-parameters.json").open(encoding="utf-8") as file:
         parameters = json.load(file)
     assert parameters == report.parameter_snapshot
+    assert parameters["normalization_density_assumptions"]["density_source_counts"]["ohlcv_proxy"] == len(
+        report.trades
+    )
+    assert parameters["normalization_density_assumptions"]["order_book_density_claim"] == (
+        "not_tested_when_density_source_is_ohlcv_proxy_or_unavailable"
+    )
 
     with (tmp_path / f"{report.run_id}-lifecycle-diagnostics.csv").open(
         newline="",
@@ -297,6 +303,10 @@ def test_report_contains_required_metrics_diagnostics_windows_and_exports(tmp_pa
         feature_rows = list(csv.DictReader(file))
     assert len(feature_rows) == len(report.trades)
     assert "feature_atr" in feature_rows[0]
+    assert feature_rows[0]["feature_density_source"] == "ohlcv_proxy"
+    assert "feature_density_volume_near_level" in feature_rows[0]
+    assert "feature_density_close_location_quality" in feature_rows[0]
+    assert feature_rows[0]["feature_normalized_threshold_mode"] == "rolling_percentiles"
     assert "feature_context_H1_available" in feature_rows[0]
 
     report_json = json.loads((tmp_path / f"{report.run_id}.json").read_text(encoding="utf-8"))
