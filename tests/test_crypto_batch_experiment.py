@@ -18,7 +18,13 @@ from src.app.breakout.experiments.crypto_batch import (
     parse_windows,
     run_batch_experiment,
 )
-from src.app.breakout.experiments.crypto_portfolio_batch import run_portfolio_batch_experiment
+from src.app.breakout.experiments.crypto_portfolio_batch import (
+    PortfolioRegimeContribution,
+    PortfolioSymbolContribution,
+    PortfolioWindowSummary,
+    _write_quarter_diagnostics,
+    run_portfolio_batch_experiment,
+)
 
 
 def test_batch_runner_writes_deterministic_summary_and_research_verdict(tmp_path, monkeypatch) -> None:
@@ -1239,6 +1245,169 @@ def test_portfolio_cost_feasible_selection_skips_high_friction_entries(tmp_path)
     assert json.loads(scorecard_rows[0]["selection_skip_counts_json"]) == {
         "portfolio_selection_cost_feasibility": 1
     }
+
+
+def test_portfolio_quarter_diagnostics_serialize_mixed_statuses_and_unavailable_fields(tmp_path) -> None:
+    windows = [
+        PortfolioWindowSummary(
+            window_label="2023q1",
+            start=datetime(2023, 1, 1, tzinfo=UTC),
+            end=datetime(2023, 4, 1, tzinfo=UTC),
+            status="passed",
+            trade_count=4,
+            accepted_trade_count=3,
+            skipped_exposure_trade_count=1,
+            selection_skip_counts={"portfolio_selection_cost_feasibility": 1},
+            net_profit=120.0,
+            max_drawdown=-0.05,
+            profit_factor=1.8,
+            symbol_count=2,
+        ),
+        PortfolioWindowSummary(
+            window_label="2023q2",
+            start=datetime(2023, 4, 1, tzinfo=UTC),
+            end=datetime(2023, 7, 1, tzinfo=UTC),
+            status="failed",
+            blockers=["net_profit_below_threshold"],
+            trade_count=2,
+            accepted_trade_count=2,
+            net_profit=-40.0,
+            max_drawdown=-0.03,
+            profit_factor=0.7,
+            symbol_count=2,
+        ),
+        PortfolioWindowSummary(
+            window_label="2023q3",
+            start=datetime(2023, 7, 1, tzinfo=UTC),
+            end=datetime(2023, 10, 1, tzinfo=UTC),
+            status="blocked",
+            blockers=["portfolio_symbol_blockers_present"],
+            trade_count=0,
+            accepted_trade_count=0,
+            blocked_symbol_count=1,
+            net_profit=0.0,
+            max_drawdown=0.0,
+            profit_factor=None,
+            symbol_count=2,
+        ),
+    ]
+    contributions = [
+        PortfolioSymbolContribution(
+            symbol="ETHUSDT",
+            window_label="2023q1",
+            status="passed",
+            trade_count=2,
+            accepted_trade_count=2,
+            net_profit=80.0,
+        ),
+        PortfolioSymbolContribution(
+            symbol="SOLUSDT",
+            window_label="2023q1",
+            status="passed",
+            trade_count=2,
+            accepted_trade_count=1,
+            skipped_exposure_trade_count=1,
+            net_profit=40.0,
+        ),
+        PortfolioSymbolContribution(
+            symbol="ETHUSDT",
+            window_label="2023q2",
+            status="failed",
+            trade_count=1,
+            accepted_trade_count=1,
+            net_profit=-20.0,
+        ),
+        PortfolioSymbolContribution(
+            symbol="SOLUSDT",
+            window_label="2023q2",
+            status="failed",
+            trade_count=1,
+            accepted_trade_count=1,
+            net_profit=-20.0,
+        ),
+        PortfolioSymbolContribution(
+            symbol="ETHUSDT",
+            window_label="2023q3",
+            status="blocked",
+            blockers=["window_exception:RuntimeError:no data"],
+        ),
+        PortfolioSymbolContribution(symbol="SOLUSDT", window_label="2023q3", status="passed"),
+    ]
+    regimes = [
+        PortfolioRegimeContribution(
+            window_label="2023q1",
+            regime_label="bull_long",
+            regime_decision="long_enabled",
+            trade_count=3,
+            accepted_trade_count=3,
+            pnl_contribution=120.0,
+        ),
+        PortfolioRegimeContribution(
+            window_label="2023q2",
+            regime_label="bear_short_or_avoid",
+            regime_decision="risk_off_blocked",
+            trade_count=2,
+            skipped_blocked_signal_count=2,
+        ),
+    ]
+
+    paths = _write_quarter_diagnostics(
+        artifact_dir=tmp_path,
+        windows=windows,
+        contributions=contributions,
+        regimes=regimes,
+        selection_profile="cost-feasible-v1",
+    )
+
+    assert set(paths) == {"quarter_diagnostics", "quarter_diagnostics_summary"}
+    with Path(paths["quarter_diagnostics"]).open(newline="", encoding="utf-8") as file:
+        rows = list(csv.DictReader(file))
+    assert [row["status"] for row in rows] == ["passed", "failed", "blocked"]
+    assert rows[0]["candidate_count"] == "4"
+    assert rows[0]["cost_feasibility_skip_ratio"] == "0.25"
+    assert "btcusdt_context_regime" in rows[0]["unavailable_fields"]
+    assert rows[0]["analysis_label"] == "outcome_analysis_not_entry_selector"
+
+    summary = json.loads(Path(paths["quarter_diagnostics_summary"]).read_text(encoding="utf-8"))
+    assert summary["passing_windows"] == ["2023q1"]
+    assert summary["failed_windows"] == ["2023q2"]
+    assert summary["blocked_windows"] == ["2023q3"]
+    assert summary["strongest_observed_differences"]
+    assert "confirmation_retest_availability_ratio" in summary["unavailable_fields"]
+    assert summary["causality_notice"].startswith("diagnostics are post-run")
+
+
+def test_portfolio_quarter_diagnostics_do_not_change_portfolio_accounting(tmp_path) -> None:
+    windows = [
+        BatchWindow(
+            label="portfolio",
+            start=datetime(2024, 1, 1, tzinfo=UTC),
+            end=datetime(2024, 1, 2, tzinfo=UTC),
+        )
+    ]
+    result = run_portfolio_batch_experiment(
+        windows=windows,
+        universe="ethusdt-only",
+        symbols=("ETHUSDT", "SOLUSDT"),
+        output_dir=tmp_path / "portfolio",
+        market_data_dir=tmp_path / "market-data",
+        gate_profile="conservative-v1-m15-slope-positive-max-trades-8-target-4p0-hold-32",
+        max_total_open_notional=2_000.0,
+        selection_profile="cost-feasible-v1",
+        run_symbol_batch=_fake_symbol_batch_factory(
+            tmp_path,
+            symbol_entry_prices={"ETHUSDT": 100.0, "SOLUSDT": 0.1},
+        ),
+    )
+
+    window = result.summary.windows[0]
+    assert window.accepted_trade_count == 1
+    assert window.selection_skip_counts == {"portfolio_selection_cost_feasibility": 1}
+    assert window.net_profit == 100.0
+    assert result.summary.diagnostic_artifact_paths
+    assert Path(result.summary.diagnostic_artifact_paths["quarter_diagnostics"]).exists()
+    summary = json.loads(result.summary_json_path.read_text(encoding="utf-8"))
+    assert summary["diagnostic_artifact_paths"] == result.summary.diagnostic_artifact_paths
 
 
 def test_portfolio_cost_feasible_selection_blocks_missing_price(tmp_path) -> None:

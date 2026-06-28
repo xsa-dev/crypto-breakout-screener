@@ -140,6 +140,7 @@ class PortfolioExperimentSummary(BaseModel):
     summary_csv_path: str
     contribution_csv_path: str
     regime_csv_path: str
+    diagnostic_artifact_paths: dict[str, str] = Field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -285,6 +286,13 @@ def run_portfolio_batch_experiment(
     contribution_csv_path = artifact_dir / "per-symbol-contributions.csv"
     regime_csv_path = artifact_dir / "per-regime-contributions.csv"
     summary_json_path = artifact_dir / "summary.json"
+    diagnostic_artifact_paths = _write_quarter_diagnostics(
+        artifact_dir=artifact_dir,
+        windows=portfolio_windows,
+        contributions=contributions,
+        regimes=regime_contributions,
+        selection_profile=selection_profile,
+    )
     aggregate = _portfolio_aggregate(
         portfolio_windows,
         thresholds=active_thresholds,
@@ -311,6 +319,7 @@ def run_portfolio_batch_experiment(
         summary_csv_path=str(summary_csv_path),
         contribution_csv_path=str(contribution_csv_path),
         regime_csv_path=str(regime_csv_path),
+        diagnostic_artifact_paths=diagnostic_artifact_paths,
     )
     _write_portfolio_scorecard(summary_csv_path, portfolio_windows)
     _write_contributions(contribution_csv_path, contributions)
@@ -767,6 +776,244 @@ def _apply_trade_counts_to_contributions(
             )
         )
     return output
+
+
+def _write_quarter_diagnostics(
+    *,
+    artifact_dir: Path,
+    windows: list[PortfolioWindowSummary],
+    contributions: list[PortfolioSymbolContribution],
+    regimes: list[PortfolioRegimeContribution],
+    selection_profile: str,
+) -> dict[str, str]:
+    diagnostics_path = artifact_dir / "quarter-diagnostics.csv"
+    summary_path = artifact_dir / "quarter-diagnostics-summary.json"
+    rows = _quarter_diagnostic_rows(
+        windows=windows,
+        contributions=contributions,
+        regimes=regimes,
+        selection_profile=selection_profile,
+    )
+    _write_csv(
+        diagnostics_path,
+        [
+            "window_label",
+            "status",
+            "blockers",
+            "candidate_count",
+            "accepted_trade_count",
+            "skipped_signal_count",
+            "selection_skip_counts_json",
+            "blocked_symbol_count",
+            "net_profit",
+            "profit_factor",
+            "max_drawdown",
+            "bull_long_trade_count",
+            "bull_long_pnl_contribution",
+            "bull_long_drawdown_contribution",
+            "bear_short_or_avoid_trade_count",
+            "bear_short_or_avoid_skipped_signal_count",
+            "bear_short_or_avoid_pnl_contribution",
+            "neutral_blocked_trade_count",
+            "neutral_blocked_skipped_signal_count",
+            "neutral_blocked_pnl_contribution",
+            "btcusdt_context_regime",
+            "ethusdt_context_regime",
+            "fixed_universe_symbol_count",
+            "fixed_universe_positive_symbol_ratio",
+            "fixed_universe_blocked_symbol_ratio",
+            "relative_strength_vs_btcusdt",
+            "relative_strength_vs_ethusdt",
+            "cost_feasibility_skip_ratio",
+            "confirmation_retest_availability_ratio",
+            "fast_failure_exit_ratio",
+            "unavailable_fields",
+            "analysis_label",
+        ],
+        rows,
+    )
+    _write_json(summary_path, _quarter_diagnostics_summary(rows))
+    return {
+        "quarter_diagnostics": str(diagnostics_path),
+        "quarter_diagnostics_summary": str(summary_path),
+    }
+
+
+def _quarter_diagnostic_rows(
+    *,
+    windows: list[PortfolioWindowSummary],
+    contributions: list[PortfolioSymbolContribution],
+    regimes: list[PortfolioRegimeContribution],
+    selection_profile: str,
+) -> list[dict[str, object]]:
+    output: list[dict[str, object]] = []
+    for window in windows:
+        window_contributions = [item for item in contributions if item.window_label == window.window_label]
+        window_regimes = [item for item in regimes if item.window_label == window.window_label]
+        regime_map = {item.regime_label: item for item in window_regimes}
+        unavailable: list[str] = []
+        btc_context = _reference_context_regime(window_contributions, "BTCUSDT")
+        eth_context = _reference_context_regime(window_contributions, "ETHUSDT")
+        if btc_context == "unavailable":
+            unavailable.append("btcusdt_context_regime")
+        if eth_context == "unavailable":
+            unavailable.append("ethusdt_context_regime")
+        relative_strength_vs_btc = _relative_strength(window.net_profit, window_contributions, "BTCUSDT")
+        relative_strength_vs_eth = _relative_strength(window.net_profit, window_contributions, "ETHUSDT")
+        if relative_strength_vs_btc == "unavailable":
+            unavailable.append("relative_strength_vs_btcusdt")
+        if relative_strength_vs_eth == "unavailable":
+            unavailable.append("relative_strength_vs_ethusdt")
+        cost_skip_ratio: float | str = "unavailable"
+        if selection_profile == "cost-feasible-v1":
+            skipped_for_cost = window.selection_skip_counts.get("portfolio_selection_cost_feasibility", 0)
+            cost_skip_ratio = skipped_for_cost / window.trade_count if window.trade_count else "unavailable"
+        if cost_skip_ratio == "unavailable":
+            unavailable.append("cost_feasibility_skip_ratio")
+        unavailable.extend(["confirmation_retest_availability_ratio", "fast_failure_exit_ratio"])
+        bull = regime_map.get("bull_long")
+        bear = regime_map.get("bear_short_or_avoid")
+        neutral = regime_map.get("neutral_blocked")
+        output.append(
+            {
+                "window_label": window.window_label,
+                "status": window.status,
+                "blockers": ";".join(window.blockers),
+                "candidate_count": window.trade_count,
+                "accepted_trade_count": window.accepted_trade_count,
+                "skipped_signal_count": window.skipped_exposure_trade_count,
+                "selection_skip_counts_json": json.dumps(window.selection_skip_counts, sort_keys=True),
+                "blocked_symbol_count": window.blocked_symbol_count,
+                "net_profit": window.net_profit,
+                "profit_factor": window.profit_factor if window.profit_factor is not None else "unavailable",
+                "max_drawdown": window.max_drawdown if window.max_drawdown is not None else "unavailable",
+                "bull_long_trade_count": bull.trade_count if bull else 0,
+                "bull_long_pnl_contribution": bull.pnl_contribution if bull else 0.0,
+                "bull_long_drawdown_contribution": bull.drawdown_contribution if bull else 0.0,
+                "bear_short_or_avoid_trade_count": bear.trade_count if bear else 0,
+                "bear_short_or_avoid_skipped_signal_count": bear.skipped_blocked_signal_count if bear else 0,
+                "bear_short_or_avoid_pnl_contribution": bear.pnl_contribution if bear else 0.0,
+                "neutral_blocked_trade_count": neutral.trade_count if neutral else 0,
+                "neutral_blocked_skipped_signal_count": neutral.skipped_blocked_signal_count if neutral else 0,
+                "neutral_blocked_pnl_contribution": neutral.pnl_contribution if neutral else 0.0,
+                "btcusdt_context_regime": btc_context,
+                "ethusdt_context_regime": eth_context,
+                "fixed_universe_symbol_count": len(window_contributions),
+                "fixed_universe_positive_symbol_ratio": _positive_symbol_ratio(window_contributions),
+                "fixed_universe_blocked_symbol_ratio": _blocked_symbol_ratio(window_contributions),
+                "relative_strength_vs_btcusdt": relative_strength_vs_btc,
+                "relative_strength_vs_ethusdt": relative_strength_vs_eth,
+                "cost_feasibility_skip_ratio": cost_skip_ratio,
+                "confirmation_retest_availability_ratio": "unavailable",
+                "fast_failure_exit_ratio": "unavailable",
+                "unavailable_fields": ";".join(sorted(set(unavailable))),
+                "analysis_label": "outcome_analysis_not_entry_selector",
+            }
+        )
+    return output
+
+
+def _quarter_diagnostics_summary(rows: list[dict[str, object]]) -> dict[str, Any]:
+    passed = [row for row in rows if row["status"] == "passed"]
+    failed = [row for row in rows if row["status"] == "failed"]
+    blocked = [row for row in rows if row["status"] == "blocked"]
+    unknown = [row for row in rows if row["status"] not in {"passed", "failed", "blocked"}]
+    comparison_fields = [
+        "candidate_count",
+        "accepted_trade_count",
+        "skipped_signal_count",
+        "net_profit",
+        "profit_factor",
+        "max_drawdown",
+        "bull_long_pnl_contribution",
+        "bear_short_or_avoid_skipped_signal_count",
+        "neutral_blocked_skipped_signal_count",
+        "fixed_universe_positive_symbol_ratio",
+        "fixed_universe_blocked_symbol_ratio",
+        "cost_feasibility_skip_ratio",
+    ]
+    non_passing = failed + blocked + unknown
+    differences: list[dict[str, object]] = []
+    for field in comparison_fields:
+        pass_mean = _mean_numeric_field(passed, field)
+        non_pass_mean = _mean_numeric_field(non_passing, field)
+        if pass_mean is None or non_pass_mean is None:
+            continue
+        differences.append(
+            {
+                "field": field,
+                "passed_mean": pass_mean,
+                "non_passing_mean": non_pass_mean,
+                "absolute_difference": abs(pass_mean - non_pass_mean),
+                "label": "outcome_analysis_not_entry_selector",
+            }
+        )
+    differences.sort(
+        key=lambda item: cast(float, item["absolute_difference"]),
+        reverse=True,
+    )
+    unavailable_fields = sorted(
+        {
+            field
+            for row in rows
+            for field in str(row.get("unavailable_fields", "")).split(";")
+            if field
+        }
+    )
+    return {
+        "passing_windows": [str(row["window_label"]) for row in passed],
+        "failed_windows": [str(row["window_label"]) for row in failed],
+        "blocked_windows": [str(row["window_label"]) for row in blocked],
+        "unknown_windows": [str(row["window_label"]) for row in unknown],
+        "strongest_observed_differences": differences[:8],
+        "unavailable_fields": unavailable_fields,
+        "underpowered_warning": "too_few_comparable_status_groups" if not passed or not non_passing else None,
+        "causality_notice": "diagnostics are post-run outcome analysis and are not entry-time selectors",
+    }
+
+
+def _mean_numeric_field(rows: list[dict[str, object]], field: str) -> float | None:
+    values: list[float] = []
+    for row in rows:
+        value = row.get(field)
+        if isinstance(value, int | float):
+            values.append(float(value))
+    return sum(values) / len(values) if values else None
+
+
+def _reference_context_regime(contributions: list[PortfolioSymbolContribution], symbol: str) -> str:
+    if not any(item.symbol == symbol for item in contributions):
+        return "unavailable"
+    for contribution in contributions:
+        if contribution.symbol != symbol or contribution.artifact_dir is None:
+            continue
+        for feature_row in _read_entry_feature_rows(Path(contribution.artifact_dir)).values():
+            regime_label, _ = _classify_trade_regime(feature_row)
+            return regime_label
+    return "unavailable"
+
+
+def _relative_strength(
+    portfolio_net_profit: float,
+    contributions: list[PortfolioSymbolContribution],
+    reference_symbol: str,
+) -> float | str:
+    reference = next((item for item in contributions if item.symbol == reference_symbol), None)
+    if reference is None:
+        return "unavailable"
+    return portfolio_net_profit - reference.net_profit
+
+
+def _positive_symbol_ratio(contributions: list[PortfolioSymbolContribution]) -> float | str:
+    if not contributions:
+        return "unavailable"
+    return sum(1 for item in contributions if item.net_profit > 0) / len(contributions)
+
+
+def _blocked_symbol_ratio(contributions: list[PortfolioSymbolContribution]) -> float | str:
+    if not contributions:
+        return "unavailable"
+    return sum(1 for item in contributions if _contribution_blocks_portfolio(item)) / len(contributions)
 
 
 def _portfolio_aggregate(
