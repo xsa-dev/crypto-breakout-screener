@@ -1198,6 +1198,79 @@ def test_portfolio_batch_includes_economically_failed_symbol_trades(tmp_path) ->
     assert [row["accepted"] for row in trade_rows] == ["True", "True"]
 
 
+def test_portfolio_cost_feasible_selection_skips_high_friction_entries(tmp_path) -> None:
+    windows = [
+        BatchWindow(
+            label="portfolio",
+            start=datetime(2024, 1, 1, tzinfo=UTC),
+            end=datetime(2024, 1, 2, tzinfo=UTC),
+        )
+    ]
+    result = run_portfolio_batch_experiment(
+        windows=windows,
+        universe="ethusdt-only",
+        symbols=("ETHUSDT", "DOGEUSDT"),
+        output_dir=tmp_path / "portfolio",
+        market_data_dir=tmp_path / "market-data",
+        gate_profile="conservative-v1-m15-slope-positive-max-trades-8-target-4p0-hold-32",
+        selection_profile="cost-feasible-v1",
+        max_total_open_notional=2_000.0,
+        run_symbol_batch=_fake_symbol_batch_factory(
+            tmp_path,
+            symbol_entry_prices={"ETHUSDT": 100.0, "DOGEUSDT": 0.1},
+        ),
+    )
+
+    window = result.summary.windows[0]
+    assert result.summary.selection_profile == "cost-feasible-v1"
+    assert result.summary.selection_settings == {"max_round_trip_friction_ratio": 0.02}
+    assert window.accepted_trade_count == 1
+    assert window.selection_skip_counts == {"portfolio_selection_cost_feasibility": 1}
+    assert window.net_profit == 100.0
+
+    with Path(window.trade_csv_path or "").open(newline="", encoding="utf-8") as file:
+        trade_rows = list(csv.DictReader(file))
+    assert [row["accepted"] for row in trade_rows] == ["False", "True"]
+    assert trade_rows[0]["symbol"] == "DOGEUSDT"
+    assert trade_rows[0]["blocker"] == "portfolio_selection_cost_feasibility"
+
+    with Path(result.summary_csv_path).open(newline="", encoding="utf-8") as file:
+        scorecard_rows = list(csv.DictReader(file))
+    assert json.loads(scorecard_rows[0]["selection_skip_counts_json"]) == {
+        "portfolio_selection_cost_feasibility": 1
+    }
+
+
+def test_portfolio_cost_feasible_selection_blocks_missing_price(tmp_path) -> None:
+    windows = [
+        BatchWindow(
+            label="portfolio",
+            start=datetime(2024, 1, 1, tzinfo=UTC),
+            end=datetime(2024, 1, 2, tzinfo=UTC),
+        )
+    ]
+    result = run_portfolio_batch_experiment(
+        windows=windows,
+        universe="ethusdt-only",
+        symbols=("ETHUSDT",),
+        output_dir=tmp_path / "portfolio",
+        market_data_dir=tmp_path / "market-data",
+        gate_profile="conservative-v1-m15-slope-positive-max-trades-8-target-4p0-hold-32",
+        selection_profile="cost-feasible-v1",
+        run_symbol_batch=_fake_symbol_batch_factory(
+            tmp_path,
+            symbol_entry_prices={"ETHUSDT": 0.0},
+        ),
+    )
+
+    window = result.summary.windows[0]
+    assert window.accepted_trade_count == 0
+    assert window.selection_skip_counts == {"portfolio_selection_missing_price": 1}
+    with Path(window.trade_csv_path or "").open(newline="", encoding="utf-8") as file:
+        trade_rows = list(csv.DictReader(file))
+    assert trade_rows[0]["blocker"] == "portfolio_selection_missing_price"
+
+
 def _fake_download_factory(tmp_path: Path):
     def download(**kwargs: Any) -> PublicDownloadResult:
         start = kwargs["start"]
@@ -1235,10 +1308,12 @@ def _fake_symbol_batch_factory(
     h4_trend: str = "long",
     d1_trend: str = "long",
     symbol_net_profits: dict[str, float] | None = None,
+    symbol_entry_prices: dict[str, float] | None = None,
 ):
     def run_symbol_batch(**kwargs: Any):
         symbol = kwargs["symbol"]
         net_profit = (symbol_net_profits or {}).get(symbol, 100.0)
+        entry_price = (symbol_entry_prices or {}).get(symbol, 100.0)
         profit_factor = 2.0 if net_profit > 0 else 2.0 / 3.0
 
         def run_single(**single_kwargs: Any) -> CryptoExperimentResult:
@@ -1267,7 +1342,7 @@ def _fake_symbol_batch_factory(
             )
             trades_path.write_text(
                 "trade_id,symbol,side,entry_time,exit_time,entry_price,exit_price,quantity,gross_pnl,total_cost,net_pnl,holding_bars,scenario,score,slippage\n"
-                f"{run_id}-1,{symbol},long,2024-01-01T00:00:00+00:00,2024-01-01T01:00:00+00:00,100,110,10,110,10,{net_profit},4,consolidation_breakout,80,0\n",
+                f"{run_id}-1,{symbol},long,2024-01-01T00:00:00+00:00,2024-01-01T01:00:00+00:00,{entry_price},110,10,110,10,{net_profit},4,consolidation_breakout,80,0\n",
                 encoding="utf-8",
             )
             entry_features_path.write_text(

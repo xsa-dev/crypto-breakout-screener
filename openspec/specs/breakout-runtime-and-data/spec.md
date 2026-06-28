@@ -89,32 +89,14 @@ The foundation implementation SHALL include tests proving online calculations do
 - **THEN** the strategy only sees data that would have been available at that historical time
 
 ### Requirement: First crypto historical experiments use public unauthenticated data
-The system SHALL support a first BTCUSDT crypto historical experiment scope using public unauthenticated market data only. The scope SHALL identify market `crypto`, instrument type `futures` or `perpetual`, execution timeframe `M15`, requested context timeframes `H1`, `H4`, and `D1`, and local report/export artifacts as the experiment output. The system SHALL support a public historical OHLCV downloader for the BTCUSDT M15/H1/H4/D1 first-slice experiment that writes deterministic CSV input for the existing canonical importer.
+The system SHALL support a first BTCUSDT crypto historical experiment scope using public unauthenticated market data only. The scope SHALL identify market `crypto`, instrument type `futures` or `perpetual`, execution timeframe `M15`, requested context timeframes `H1`, `H4`, and `D1`, and local report/export artifacts as the experiment output. The system SHALL support a public historical OHLCV downloader for the BTCUSDT M15/H1/H4/D1 first-slice experiment that writes deterministic CSV input for the existing canonical importer. Shared-bankroll portfolio selection profiles SHALL use only downloaded public OHLCV-derived entry-time values plus configured cost settings and SHALL NOT request private or live data.
 
-#### Scenario: BTCUSDT first experiment scope is loaded
-- **WHEN** the first crypto historical experiment runner is configured with defaults
-- **THEN** the market is `crypto`
-- **AND** the first symbol is `BTCUSDT`
-- **AND** the instrument type is `perpetual` or `futures`
-- **AND** the execution timeframe is `M15`
-- **AND** context timeframe metadata includes `H1`, `H4`, and `D1`
-- **AND** the output target is a local backtest report/export artifact set
-
-#### Scenario: Public data source is required
-- **WHEN** the first crypto experiment loads market data
-- **THEN** it uses public unauthenticated market-data input such as a CSV importer or public OHLCV endpoint
-- **AND** it does not require API keys, private account state, authorization headers, balances, positions, private order history, or `.env` credentials
-
-#### Scenario: Public BTCUSDT M15/H1/H4/D1 data is downloaded
-- **WHEN** the user requests a public download for BTCUSDT M15/H1/H4/D1 with explicit UTC start and end timestamps
-- **THEN** the downloader fetches public unauthenticated OHLCV/kline data for BTCUSDT linear/perpetual history for all four timeframes
-- **AND** writes deterministic local CSV files compatible with the existing `Bar` importer
-- **AND** records provider/source metadata including venue, endpoint family, category/instrument type, intervals, requested range, fetched ranges, page counts, and row counts without secrets
-
-#### Scenario: Download range is invalid or open-ended
-- **WHEN** the public downloader is called without explicit start/end timestamps or with an invalid range
-- **THEN** it fails closed with an explicit validation error
-- **AND** no completed dataset/report artifact is claimed
+#### Scenario: Approved public crypto data is requested
+- **WHEN** a research runner requests historical crypto data for an approved symbol, timeframe, and UTC start/end
+- **THEN** the downloader uses public unauthenticated market-data endpoints only
+- **AND** writes deterministic local CSV artifacts and manifest metadata
+- **AND** records provider, symbol, timeframe, requested range, received range, row counts, and any feed gaps
+- **AND** cost-feasibility selection, when enabled by a portfolio runner, uses only downloaded public OHLCV-derived entry-time values plus configured cost settings and does not request private or live data.
 
 ### Requirement: Historical crypto bars are normalized into canonical Bar records
 The system SHALL normalize historical crypto OHLCV rows into the existing canonical `Bar` schema with UTC timestamps, deterministic ordering/deduplication, OHLC validation, gap diagnostics, and source metadata.

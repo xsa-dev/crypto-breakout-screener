@@ -75,6 +75,7 @@ class PortfolioWindowSummary(BaseModel):
     trade_count: int = 0
     accepted_trade_count: int = 0
     skipped_exposure_trade_count: int = 0
+    selection_skip_counts: dict[str, int] = Field(default_factory=dict)
     net_profit: float = 0.0
     max_drawdown: float | None = None
     profit_factor: float | None = None
@@ -128,6 +129,8 @@ class PortfolioExperimentSummary(BaseModel):
     max_trade_notional: float
     max_total_open_notional: float
     gate_profile: str
+    selection_profile: str = "none"
+    selection_settings: dict[str, Any] = Field(default_factory=dict)
     cost_model_settings: dict[str, float]
     windows: list[PortfolioWindowSummary]
     aggregate: PortfolioAggregate
@@ -163,6 +166,7 @@ def run_portfolio_batch_experiment(
     starting_equity: float = 10_000.0,
     max_trade_notional: float = 1_000.0,
     max_total_open_notional: float = 3_000.0,
+    selection_profile: str = "none",
     spread: float = 1.0,
     slippage: float = 0.5,
     commission_rate: float = 0.00055,
@@ -185,6 +189,7 @@ def run_portfolio_batch_experiment(
         raise ValueError(msg)
     active_symbols = list(symbols or resolve_crypto_research_universe(universe))
     active_thresholds = thresholds or ResearchThresholds()
+    active_selection_settings = _selection_settings(selection_profile)
     cost_model_settings = {
         "spread": spread,
         "slippage_per_unit": slippage,
@@ -200,6 +205,8 @@ def run_portfolio_batch_experiment(
         starting_equity=starting_equity,
         max_trade_notional=max_trade_notional,
         max_total_open_notional=max_total_open_notional,
+        selection_profile=selection_profile,
+        selection_settings=active_selection_settings,
         cost_model_settings=cost_model_settings,
     )
     artifact_dir = Path(output_dir) / gate_profile / portfolio_id
@@ -264,6 +271,10 @@ def run_portfolio_batch_experiment(
             starting_equity=starting_equity,
             max_trade_notional=max_trade_notional,
             max_total_open_notional=max_total_open_notional,
+            selection_profile=selection_profile,
+            selection_settings=active_selection_settings,
+            spread=spread,
+            slippage=slippage,
             artifact_dir=artifact_dir,
         )
         portfolio_windows.append(window_summary)
@@ -289,6 +300,8 @@ def run_portfolio_batch_experiment(
         max_trade_notional=max_trade_notional,
         max_total_open_notional=max_total_open_notional,
         gate_profile=gate_profile,
+        selection_profile=selection_profile,
+        selection_settings=active_selection_settings,
         cost_model_settings=cost_model_settings,
         windows=portfolio_windows,
         aggregate=aggregate,
@@ -478,12 +491,20 @@ def _portfolio_window_summary(
     starting_equity: float,
     max_trade_notional: float,
     max_total_open_notional: float,
+    selection_profile: str,
+    selection_settings: dict[str, Any],
+    spread: float,
+    slippage: float,
     artifact_dir: Path,
 ) -> tuple[PortfolioWindowSummary, list[PortfolioRegimeContribution]]:
     accepted = _apply_exposure_caps(
         trades,
         max_trade_notional=max_trade_notional,
         max_total_open_notional=max_total_open_notional,
+        selection_profile=selection_profile,
+        selection_settings=selection_settings,
+        spread=spread,
+        slippage=slippage,
     )
     regime_rows = _regime_contributions(window=window, trades=accepted)
     equity_rows, max_drawdown = _portfolio_equity(
@@ -497,6 +518,7 @@ def _portfolio_window_summary(
     profit_factor = gross_profit / gross_loss if gross_loss > 0 else (None if gross_profit <= 0 else 999999.0)
     blocked_symbol_count = sum(1 for item in contributions if _contribution_blocks_portfolio(item))
     skipped_count = sum(1 for trade in accepted if not trade.accepted)
+    selection_skip_counts = _selection_skip_counts(accepted)
     accepted_count = sum(1 for trade in accepted if trade.accepted)
     blockers = _portfolio_window_blockers(
         trade_count=accepted_count,
@@ -529,6 +551,7 @@ def _portfolio_window_summary(
         trade_count=len(trades),
         accepted_trade_count=accepted_count,
         skipped_exposure_trade_count=skipped_count,
+        selection_skip_counts=selection_skip_counts,
         net_profit=net_profit,
         max_drawdown=max_drawdown,
         profit_factor=profit_factor,
@@ -549,10 +572,13 @@ def _portfolio_window_summary(
 
 
 def _apply_exposure_caps(
-    trades: list[PortfolioTrade], *, max_trade_notional: float, max_total_open_notional: float
+    trades: list[PortfolioTrade], *, max_trade_notional: float, max_total_open_notional: float,
+    selection_profile: str = "none", selection_settings: dict[str, Any] | None = None,
+    spread: float = 1.0, slippage: float = 0.5,
 ) -> list[PortfolioTrade]:
     accepted: list[PortfolioTrade] = []
     open_trades: list[PortfolioTrade] = []
+    active_selection_settings = selection_settings or {}
     for trade in trades:
         open_trades = [item for item in open_trades if item.exit_time > trade.entry_time]
         current_open = sum(item.notional for item in open_trades if item.accepted)
@@ -560,6 +586,17 @@ def _apply_exposure_caps(
             rejected = trade.model_copy(
                 update={"accepted": False, "blocker": f"portfolio_regime_{trade.regime_label}"}
             )
+            accepted.append(rejected)
+            continue
+        selection_blocker = _portfolio_selection_blocker(
+            trade,
+            selection_profile=selection_profile,
+            selection_settings=active_selection_settings,
+            spread=spread,
+            slippage=slippage,
+        )
+        if selection_blocker is not None:
+            rejected = trade.model_copy(update={"accepted": False, "blocker": selection_blocker})
             accepted.append(rejected)
             continue
         original_notional = trade.notional or max_trade_notional
@@ -575,6 +612,48 @@ def _apply_exposure_caps(
         accepted.append(adjusted)
         open_trades.append(adjusted)
     return accepted
+
+
+def _selection_settings(selection_profile: str) -> dict[str, Any]:
+    if selection_profile == "none":
+        return {}
+    if selection_profile == "cost-feasible-v1":
+        return {"max_round_trip_friction_ratio": 0.02}
+    msg = f"unsupported portfolio selection profile: {selection_profile}"
+    raise ValueError(msg)
+
+
+def _portfolio_selection_blocker(
+    trade: PortfolioTrade,
+    *,
+    selection_profile: str,
+    selection_settings: dict[str, Any],
+    spread: float,
+    slippage: float,
+) -> str | None:
+    if selection_profile == "none":
+        return None
+    if selection_profile != "cost-feasible-v1":
+        msg = f"unsupported portfolio selection profile: {selection_profile}"
+        raise ValueError(msg)
+    if trade.entry_price <= 0:
+        return "portfolio_selection_missing_price"
+    max_ratio = float(selection_settings.get("max_round_trip_friction_ratio", 0.02))
+    round_trip_friction = spread + (2.0 * slippage)
+    if round_trip_friction / trade.entry_price > max_ratio:
+        return "portfolio_selection_cost_feasibility"
+    return None
+
+
+def _selection_skip_counts(trades: list[PortfolioTrade]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for trade in trades:
+        if trade.accepted or trade.blocker is None or not trade.blocker.startswith(
+            "portfolio_selection_"
+        ):
+            continue
+        counts[trade.blocker] = counts.get(trade.blocker, 0) + 1
+    return counts
 
 
 def _regime_contributions(
@@ -759,6 +838,7 @@ def _write_portfolio_scorecard(path: Path, windows: list[PortfolioWindowSummary]
             "trade_count",
             "accepted_trade_count",
             "skipped_exposure_trade_count",
+            "selection_skip_counts_json",
             "net_profit",
             "net_profit_buffer",
             "profit_factor",
@@ -776,6 +856,9 @@ def _write_portfolio_scorecard(path: Path, windows: list[PortfolioWindowSummary]
             {
                 **window.model_dump(mode="json"),
                 "blockers": ";".join(window.blockers),
+                "selection_skip_counts_json": json.dumps(
+                    window.selection_skip_counts, sort_keys=True, ensure_ascii=False
+                ),
             }
             for window in windows
         ],
@@ -907,6 +990,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--starting-equity", type=float, default=10_000.0)
     parser.add_argument("--max-trade-notional", type=float, default=1_000.0)
     parser.add_argument("--max-total-open-notional", type=float, default=3_000.0)
+    parser.add_argument("--selection-profile", choices=["none", "cost-feasible-v1"], default="none")
     parser.add_argument("--spread", type=float, default=1.0)
     parser.add_argument("--slippage", type=float, default=0.5)
     parser.add_argument("--commission-rate", type=float, default=0.00055)
@@ -928,6 +1012,7 @@ def main(argv: list[str] | None = None) -> int:
         starting_equity=args.starting_equity,
         max_trade_notional=args.max_trade_notional,
         max_total_open_notional=args.max_total_open_notional,
+        selection_profile=args.selection_profile,
         spread=args.spread,
         slippage=args.slippage,
         commission_rate=args.commission_rate,
