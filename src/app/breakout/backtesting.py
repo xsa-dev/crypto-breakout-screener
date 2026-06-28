@@ -38,6 +38,17 @@ from src.core.models import (
 )
 from src.core.schemas import Bar
 
+LIFECYCLE_STATES: tuple[str, ...] = (
+    "level_found",
+    "compression",
+    "approach",
+    "breakout",
+    "confirmation",
+    "retest",
+    "continuation",
+    "failure_exit",
+)
+
 
 @dataclass
 class ResearchGateState:
@@ -119,6 +130,7 @@ class BacktestEngine:
         dataset_hash = stable_hash(ordered)
         config_hash = stable_hash(self.config)
         trades: list[BacktestTrade] = []
+        lifecycle_state_audit: list[dict[str, object]] = []
         equity = self.config.initial_equity
         equity_curve: list[dict[str, float | str]] = [
             {"timestamp": ordered[0]["ts"].isoformat(), "equity": equity}
@@ -143,6 +155,7 @@ class BacktestEngine:
                     index=index,
                     config_hash=config_hash,
                     gate_state=gate_state,
+                    lifecycle_state_audit=lifecycle_state_audit,
                 )
             else:
                 result = self._evaluate_closed_bar(
@@ -153,6 +166,7 @@ class BacktestEngine:
                     index,
                     config_hash,
                     gate_state,
+                    lifecycle_state_audit,
                 )
                 if isinstance(result, PendingBreakoutCandidate):
                     pending_candidate = result
@@ -183,6 +197,7 @@ class BacktestEngine:
             monte_carlo=monte_carlo,
             unavailable_reasons=unavailable,
             gate_skip_counts=dict(gate_state.skip_counts),
+            lifecycle_state_audit=lifecycle_state_audit,
         )
 
     def monte_carlo(
@@ -232,6 +247,7 @@ class BacktestEngine:
         daily_summary_path = directory / f"{report.run_id}-daily-summary.csv"
         weekly_summary_path = directory / f"{report.run_id}-weekly-summary.csv"
         lifecycle_path = directory / f"{report.run_id}-lifecycle-diagnostics.csv"
+        lifecycle_state_path = directory / f"{report.run_id}-lifecycle-state-audit.csv"
         score_bucket_pnl_path = directory / f"{report.run_id}-score-bucket-pnl.csv"
         entry_features_path = directory / f"{report.run_id}-entry-feature-snapshots.csv"
         feature_bucket_pnl_path = directory / f"{report.run_id}-feature-bucket-pnl.csv"
@@ -324,6 +340,7 @@ class BacktestEngine:
             weekly_trade_summary(report.trades),
         )
         _write_metric_csv(lifecycle_path, "metric", lifecycle_diagnostics(report))
+        _write_dynamic_csv_rows(lifecycle_state_path, report.lifecycle_state_audit)
         _write_csv_rows(
             score_bucket_pnl_path,
             ["score", "trade_count", "net_pnl", "average_trade", "win_rate"],
@@ -364,6 +381,7 @@ class BacktestEngine:
             str(daily_summary_path),
             str(weekly_summary_path),
             str(lifecycle_path),
+            str(lifecycle_state_path),
             str(score_bucket_pnl_path),
             str(entry_features_path),
             str(feature_bucket_pnl_path),
@@ -394,6 +412,7 @@ class BacktestEngine:
         index: int,
         config_hash: str,
         gate_state: ResearchGateState,
+        lifecycle_state_audit: list[dict[str, object]],
     ) -> BacktestTrade | PendingBreakoutCandidate | None:
         levels = self.level_engine.detect_pivots(list(history), as_of_index=len(history) - 1)
         pivot_highs = [level for level in levels if level.price < current["close"]]
@@ -411,6 +430,7 @@ class BacktestEngine:
             score=score,
             gate_state=gate_state,
         )
+        confirmation_without_filter = not self.config.confirmation_filters.configured
         score_blocker = self._research_gate_reason(
             gate_state,
             current=current,
@@ -419,10 +439,32 @@ class BacktestEngine:
         )
         if score_blocker is not None:
             gate_state.skip_counts[score_blocker] += 1
+            lifecycle_state_audit.append(
+                _candidate_lifecycle_row(
+                    current=current,
+                    index=index,
+                    score=score.total,
+                    feature_snapshot=feature_snapshot,
+                    blocker=score_blocker,
+                    accepted=False,
+                    confirmation_reached=confirmation_without_filter,
+                )
+            )
             return None
         feature_blocker = self._feature_filter_reason(feature_snapshot)
         if feature_blocker is not None:
             gate_state.skip_counts[feature_blocker] += 1
+            lifecycle_state_audit.append(
+                _candidate_lifecycle_row(
+                    current=current,
+                    index=index,
+                    score=score.total,
+                    feature_snapshot=feature_snapshot,
+                    blocker=feature_blocker,
+                    accepted=False,
+                    confirmation_reached=confirmation_without_filter,
+                )
+            )
             return None
         stop_price = current["close"] - self.config.stop_distance
         market = MarketSnapshot(
@@ -444,10 +486,32 @@ class BacktestEngine:
             market=market,
         )
         if not intents:
+            lifecycle_state_audit.append(
+                _candidate_lifecycle_row(
+                    current=current,
+                    index=index,
+                    score=score.total,
+                    feature_snapshot=feature_snapshot,
+                    blocker="entry_intent_not_generated",
+                    accepted=False,
+                    confirmation_reached=confirmation_without_filter,
+                )
+            )
             return None
         intent = intents[-1]
         decision = self.risk_manager.evaluate(intent, RiskState())
         if not decision.approved or decision.quantity <= 0:
+            lifecycle_state_audit.append(
+                _candidate_lifecycle_row(
+                    current=current,
+                    index=index,
+                    score=score.total,
+                    feature_snapshot=feature_snapshot,
+                    blocker="risk_rejected",
+                    accepted=False,
+                    confirmation_reached=confirmation_without_filter,
+                )
+            )
             return None
         if self.config.confirmation_filters.configured:
             return PendingBreakoutCandidate(
@@ -459,7 +523,7 @@ class BacktestEngine:
                 candidate_bar=current,
                 feature_snapshot=feature_snapshot,
             )
-        return self._close_profile_trade(
+        trade = self._close_profile_trade(
             score=score,
             quantity=decision.quantity,
             current=current,
@@ -470,6 +534,19 @@ class BacktestEngine:
             level_price=level.price,
             feature_snapshot=feature_snapshot,
         )
+        lifecycle_state_audit.append(
+            _candidate_lifecycle_row(
+                current=current,
+                index=index,
+                score=score.total,
+                feature_snapshot=feature_snapshot,
+                blocker=None,
+                accepted=True,
+                trade=trade,
+                confirmation_reached=True,
+            )
+        )
+        return trade
 
     def _evaluate_pending_confirmation(
         self,
@@ -481,51 +558,56 @@ class BacktestEngine:
         index: int,
         config_hash: str,
         gate_state: ResearchGateState,
+        lifecycle_state_audit: list[dict[str, object]],
     ) -> tuple[BacktestTrade | None, PendingBreakoutCandidate | None]:
         filters = self.config.confirmation_filters
+        def skip_pending(blocker: str) -> tuple[BacktestTrade | None, PendingBreakoutCandidate | None]:
+            gate_state.skip_counts[blocker] += 1
+            lifecycle_state_audit.append(
+                _candidate_lifecycle_row(
+                    current=candidate.candidate_bar,
+                    index=candidate.candidate_index,
+                    score=candidate.score.total,
+                    feature_snapshot=candidate.feature_snapshot,
+                    blocker=blocker,
+                    accepted=False,
+                    confirmation_reached=False,
+                )
+            )
+            return None, None
+
         if filters.cancel_on_return_inside_range and current["low"] <= candidate.pre_breakout_range_high:
-            gate_state.skip_counts["skipped_confirmation_returned_inside_range"] += 1
-            return None, None
+            return skip_pending("skipped_confirmation_returned_inside_range")
         if current["close"] <= candidate.breakout_level:
-            gate_state.skip_counts["skipped_confirmation_close_not_above_breakout"] += 1
-            return None, None
+            return skip_pending("skipped_confirmation_close_not_above_breakout")
         heikin_ashi_snapshot = _heikin_ashi_feature_snapshot(all_bars[: index + 1])
         if filters.require_heikin_ashi_bullish and heikin_ashi_snapshot.get("feature_ha_color") != "bullish":
-            gate_state.skip_counts["skipped_confirmation_heikin_ashi_not_bullish"] += 1
-            return None, None
+            return skip_pending("skipped_confirmation_heikin_ashi_not_bullish")
         if filters.min_heikin_ashi_body_ratio is not None:
             body_ratio = heikin_ashi_snapshot.get("feature_ha_body_range_ratio")
             if not isinstance(body_ratio, int | float):
-                gate_state.skip_counts["skipped_confirmation_heikin_ashi_body_ratio_unavailable"] += 1
-                return None, None
+                return skip_pending("skipped_confirmation_heikin_ashi_body_ratio_unavailable")
             if body_ratio < filters.min_heikin_ashi_body_ratio:
-                gate_state.skip_counts["skipped_confirmation_heikin_ashi_body_ratio_below_min"] += 1
-                return None, None
+                return skip_pending("skipped_confirmation_heikin_ashi_body_ratio_below_min")
         if filters.max_heikin_ashi_upper_wick_ratio is not None:
             upper_wick_ratio = heikin_ashi_snapshot.get("feature_ha_upper_wick_range_ratio")
             if not isinstance(upper_wick_ratio, int | float):
-                gate_state.skip_counts["skipped_confirmation_heikin_ashi_upper_wick_unavailable"] += 1
-                return None, None
+                return skip_pending("skipped_confirmation_heikin_ashi_upper_wick_unavailable")
             if upper_wick_ratio > filters.max_heikin_ashi_upper_wick_ratio:
-                gate_state.skip_counts["skipped_confirmation_heikin_ashi_upper_wick_above_cap"] += 1
-                return None, None
+                return skip_pending("skipped_confirmation_heikin_ashi_upper_wick_above_cap")
         if filters.min_heikin_ashi_color_streak is not None:
             color_streak = heikin_ashi_snapshot.get("feature_ha_color_streak")
             if not isinstance(color_streak, int | float):
-                gate_state.skip_counts["skipped_confirmation_heikin_ashi_color_streak_unavailable"] += 1
-                return None, None
+                return skip_pending("skipped_confirmation_heikin_ashi_color_streak_unavailable")
             if color_streak < filters.min_heikin_ashi_color_streak:
-                gate_state.skip_counts["skipped_confirmation_heikin_ashi_color_streak_below_min"] += 1
-                return None, None
+                return skip_pending("skipped_confirmation_heikin_ashi_color_streak_below_min")
         if filters.min_close_position is not None:
             current_range = current["high"] - current["low"]
             if current_range <= 0:
-                gate_state.skip_counts["skipped_confirmation_close_position_unavailable"] += 1
-                return None, None
+                return skip_pending("skipped_confirmation_close_position_unavailable")
             close_position = (current["close"] - current["low"]) / current_range
             if close_position < filters.min_close_position:
-                gate_state.skip_counts["skipped_confirmation_close_position_below_min"] += 1
-                return None, None
+                return skip_pending("skipped_confirmation_close_position_below_min")
         candidate.confirmed_closes += 1
         if candidate.confirmed_closes < filters.required_closes_above_breakout:
             return None, candidate
@@ -538,20 +620,30 @@ class BacktestEngine:
                 "feature_confirmation_closes": candidate.confirmed_closes,
             }
         )
-        return (
-            self._close_profile_trade(
-                score=candidate.score,
-                quantity=candidate.quantity,
-                current=current,
-                next_bar=next_bar,
-                future_bars=all_bars[index + 1 : index + self.config.exit_profile.fixed_holding_bars + 1],
-                index=index,
-                config_hash=config_hash,
-                level_price=candidate.breakout_level,
-                feature_snapshot=feature_snapshot,
-            ),
-            None,
+        trade = self._close_profile_trade(
+            score=candidate.score,
+            quantity=candidate.quantity,
+            current=current,
+            next_bar=next_bar,
+            future_bars=all_bars[index + 1 : index + self.config.exit_profile.fixed_holding_bars + 1],
+            index=index,
+            config_hash=config_hash,
+            level_price=candidate.breakout_level,
+            feature_snapshot=feature_snapshot,
         )
+        lifecycle_state_audit.append(
+            _candidate_lifecycle_row(
+                current=candidate.candidate_bar,
+                index=candidate.candidate_index,
+                score=candidate.score.total,
+                feature_snapshot=feature_snapshot,
+                blocker=None,
+                accepted=True,
+                trade=trade,
+                confirmation_reached=True,
+            )
+        )
+        return trade, None
 
 
     def _close_profile_trade(
@@ -1199,6 +1291,76 @@ def _write_csv_rows(
         writer.writerows(rows)
 
 
+def _candidate_lifecycle_row(
+    *,
+    current: Bar,
+    index: int,
+    score: int,
+    feature_snapshot: Mapping[str, float | int | str | bool],
+    blocker: str | None,
+    accepted: bool,
+    confirmation_reached: bool,
+    trade: BacktestTrade | None = None,
+) -> dict[str, object]:
+    """Build deterministic lifecycle audit row from candidate-time evidence only."""
+
+    compression = _state_available(feature_snapshot.get("feature_consolidation_range_atr"))
+    approach = _state_available(feature_snapshot.get("feature_approach_velocity"))
+    failure_exit = bool(trade is not None and _is_failure_exit(trade))
+    continuation = bool(accepted and trade is not None and not failure_exit)
+    states = {
+        "level_found": True,
+        "compression": compression,
+        "approach": approach,
+        "breakout": True,
+        "confirmation": confirmation_reached,
+        "retest": False,
+        "continuation": continuation,
+        "failure_exit": failure_exit,
+    }
+    furthest = "level_found"
+    for state in LIFECYCLE_STATES:
+        if states[state]:
+            furthest = state
+    row: dict[str, object] = {
+        "trade_id": trade.trade_id if trade is not None else "unavailable",
+        "candidate_id": stable_hash({"symbol": current["symbol"], "ts": current["ts"], "index": index})[:16],
+        "symbol": current["symbol"],
+        "side": Side.LONG.value,
+        "entry_time": current["ts"].isoformat(),
+        "entry_index": index,
+        "score": score,
+        "accepted": accepted,
+        "blocker": blocker or "",
+        "furthest_lifecycle_state": furthest,
+        "candidate_time": current["ts"].isoformat(),
+        "exit_time": trade.exit_time.isoformat() if trade is not None else current["ts"].isoformat(),
+        "net_pnl": trade.net_pnl if trade is not None else 0.0,
+        "gross_pnl": trade.gross_pnl if trade is not None else 0.0,
+        "total_cost": trade.total_cost if trade is not None else 0.0,
+        "lifecycle_order": ">".join(LIFECYCLE_STATES),
+        "lifecycle_source": "candidate_time_public_ohlcv_and_simulated_accounting",
+    }
+    row.update({f"lifecycle_{state}": states[state] for state in LIFECYCLE_STATES})
+    return row
+
+
+def _state_available(value: object) -> bool:
+    return isinstance(value, int | float) and value >= 0
+
+
+def _is_failure_exit(trade: BacktestTrade) -> bool:
+    reason = str(trade.metadata.get("exit_reason", ""))
+    return trade.net_pnl < 0 or "stop" in reason or "timeout" in reason or "breakeven" in reason
+
+
+def _lifecycle_state_counts(rows: Sequence[Mapping[str, object]]) -> dict[str, int]:
+    return {
+        state: sum(1 for row in rows if row.get(f"lifecycle_{state}") is True)
+        for state in LIFECYCLE_STATES
+    }
+
+
 def _write_dynamic_csv_rows(path: Path, rows: Sequence[Mapping[str, object]]) -> None:
     base_fields = [
         "trade_id",
@@ -1281,6 +1443,10 @@ def lifecycle_diagnostics(report: BacktestReport) -> dict[str, object]:
     if isinstance(skip_counts, Mapping):
         for key, value in sorted(skip_counts.items()):
             diagnostics[f"gate_{key}"] = value
+    for state, count in _lifecycle_state_counts(report.lifecycle_state_audit).items():
+        diagnostics[f"lifecycle_{state}_count"] = count
+    skipped_candidates = [row for row in report.lifecycle_state_audit if row.get("accepted") is False]
+    diagnostics["lifecycle_skipped_candidate_count"] = len(skipped_candidates)
     return diagnostics
 
 
@@ -2168,6 +2334,7 @@ def build_report(
     monte_carlo: MonteCarloResult,
     unavailable_reasons: Mapping[str, str] | None = None,
     gate_skip_counts: Mapping[str, int] | None = None,
+    lifecycle_state_audit: Sequence[Mapping[str, object]] | None = None,
 ) -> BacktestReport:
     """Build metrics and diagnostic payloads from simulated trades."""
 
@@ -2181,6 +2348,8 @@ def build_report(
     parameter_snapshot["exit_profile_counts"] = dict(
         sorted(Counter(str(trade.metadata.get("exit_reason", "unknown")) for trade in trades).items())
     )
+    lifecycle_rows = [dict(row) for row in lifecycle_state_audit or []]
+    parameter_snapshot["lifecycle_state_counts"] = _lifecycle_state_counts(lifecycle_rows)
     scenario_breakdown: dict[str, int] = {}
     score_distribution: dict[str, int] = {}
     false_breakouts = 0
@@ -2240,6 +2409,7 @@ def build_report(
         holding_horizon_diagnostics=holding_horizon_diagnostics,
         path_risk_diagnostics=path_risk_diagnostics,
         path_risk_threshold_summary=path_risk_summaries,
+        lifecycle_state_audit=lifecycle_rows,
     )
 
 

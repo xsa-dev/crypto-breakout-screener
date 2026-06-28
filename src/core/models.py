@@ -771,4 +771,5 @@ class BacktestReport(BaseModel):
     holding_horizon_diagnostics: list[dict[str, object]] = Field(default_factory=list)
     path_risk_diagnostics: list[dict[str, object]] = Field(default_factory=list)
     path_risk_threshold_summary: list[dict[str, object]] = Field(default_factory=list)
+    lifecycle_state_audit: list[dict[str, object]] = Field(default_factory=list)
     artifact_paths: list[str] = Field(default_factory=list)

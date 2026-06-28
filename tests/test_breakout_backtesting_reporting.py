@@ -221,6 +221,7 @@ def test_report_contains_required_metrics_diagnostics_windows_and_exports(tmp_pa
         f"{report.run_id}-daily-summary.csv",
         f"{report.run_id}-weekly-summary.csv",
         f"{report.run_id}-lifecycle-diagnostics.csv",
+        f"{report.run_id}-lifecycle-state-audit.csv",
         f"{report.run_id}-score-bucket-pnl.csv",
         f"{report.run_id}-entry-feature-snapshots.csv",
         f"{report.run_id}-feature-bucket-pnl.csv",
@@ -254,6 +255,19 @@ def test_report_contains_required_metrics_diagnostics_windows_and_exports(tmp_pa
     assert lifecycle["total_trades"] == str(len(report.trades))
     assert lifecycle["immediate_reentry_count"] == "2"
     assert lifecycle["holding_bars_distribution"] == "1:3"
+    assert lifecycle["lifecycle_level_found_count"] == str(len(report.lifecycle_state_audit))
+
+    with (tmp_path / f"{report.run_id}-lifecycle-state-audit.csv").open(
+        newline="",
+        encoding="utf-8",
+    ) as file:
+        lifecycle_rows = list(csv.DictReader(file))
+    assert lifecycle_rows
+    assert lifecycle_rows[0]["lifecycle_order"] == (
+        "level_found>compression>approach>breakout>confirmation>retest>continuation>failure_exit"
+    )
+    assert lifecycle_rows[0]["accepted"] == "True"
+    assert "furthest_lifecycle_state" in lifecycle_rows[0]
 
     with (tmp_path / f"{report.run_id}-daily-summary.csv").open(
         newline="",
@@ -299,6 +313,26 @@ def test_report_contains_required_metrics_diagnostics_windows_and_exports(tmp_pa
     second_export = BacktestEngine(config()).export_report(report, tmp_path)
     assert second_export.artifact_paths == exported.artifact_paths
 
+
+
+def test_lifecycle_state_audit_preserves_skipped_candidates_with_blocker() -> None:
+    skipped_config = config().model_copy(
+        update={"research_gates": BacktestResearchGateConfig(min_entry_score=95)}
+    )
+
+    report = BacktestEngine(skipped_config).run(breakout_dataset())
+
+    assert report.trades == []
+    assert report.lifecycle_state_audit
+    skipped = report.lifecycle_state_audit[0]
+    assert skipped["accepted"] is False
+    assert skipped["blocker"] == "skipped_min_entry_score"
+    assert skipped["lifecycle_level_found"] is True
+    assert skipped["lifecycle_breakout"] is True
+    assert skipped["furthest_lifecycle_state"] == "confirmation"
+    assert report.parameter_snapshot["lifecycle_state_counts"]["level_found"] == len(
+        report.lifecycle_state_audit
+    )
 
 def test_production_oos_gate_blocks_missing_thresholds() -> None:
     report = BacktestEngine(config()).run(breakout_dataset())

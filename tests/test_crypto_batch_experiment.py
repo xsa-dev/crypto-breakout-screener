@@ -1151,16 +1151,22 @@ def test_portfolio_batch_uses_one_shared_bankroll_and_exposure_cap(tmp_path) -> 
     window = result.summary.windows[0]
     assert result.summary.aggregate.starting_equity == 10_000.0
     assert result.summary.aggregate.max_total_open_notional == 1_000.0
-    assert window.trade_count == 2
+    assert window.trade_count == 4
     assert window.accepted_trade_count == 1
-    assert window.skipped_exposure_trade_count == 1
+    assert window.skipped_exposure_trade_count == 3
+    assert window.lifecycle_state_counts["level_found"] == 4
+    assert window.lifecycle_state_counts["continuation"] == 2
     assert window.net_profit == 100.0
     assert window.status == "passed"
 
     with Path(window.trade_csv_path or "").open(newline="", encoding="utf-8") as file:
         trade_rows = list(csv.DictReader(file))
-    assert [row["accepted"] for row in trade_rows] == ["True", "False"]
-    assert trade_rows[1]["blocker"] == "portfolio_total_exposure_cap_exceeded"
+    assert [row["accepted"] for row in trade_rows] == ["True", "False", "False", "False"]
+    blockers = [row["blocker"] for row in trade_rows]
+    assert "skipped_min_entry_score" in blockers
+    skipped_row = next(row for row in trade_rows if row["blocker"] == "skipped_min_entry_score")
+    assert skipped_row["furthest_lifecycle_state"] == "breakout"
+    assert "portfolio_total_exposure_cap_exceeded" in blockers
 
 
 def test_portfolio_batch_blocks_bearish_or_ambiguous_regimes(tmp_path) -> None:
@@ -1188,7 +1194,7 @@ def test_portfolio_batch_blocks_bearish_or_ambiguous_regimes(tmp_path) -> None:
 
     window = result.summary.windows[0]
     assert window.accepted_trade_count == 0
-    assert window.skipped_exposure_trade_count == 1
+    assert window.skipped_exposure_trade_count == 2
     assert window.blockers == [
         "trade_count_below_threshold",
         "net_profit_below_threshold",
@@ -1197,6 +1203,7 @@ def test_portfolio_batch_blocks_bearish_or_ambiguous_regimes(tmp_path) -> None:
     assert result.summary.per_regime_contributions[1].regime_label == "bear_short_or_avoid"
     assert result.summary.per_regime_contributions[1].regime_decision == "risk_off_blocked"
     assert result.summary.per_regime_contributions[1].skipped_blocked_signal_count == 1
+    assert result.summary.per_regime_contributions[2].skipped_blocked_signal_count == 1
 
     with Path(window.trade_csv_path or "").open(newline="", encoding="utf-8") as file:
         trade_rows = list(csv.DictReader(file))
@@ -1261,7 +1268,7 @@ def test_portfolio_batch_includes_economically_failed_symbol_trades(tmp_path) ->
 
     window = result.summary.windows[0]
     assert window.status == "failed"
-    assert window.trade_count == 2
+    assert window.trade_count == 4
     assert window.accepted_trade_count == 2
     assert window.net_profit == -50.0
     assert window.net_profit_buffer == -50.0
@@ -1271,8 +1278,8 @@ def test_portfolio_batch_includes_economically_failed_symbol_trades(tmp_path) ->
 
     with Path(window.trade_csv_path or "").open(newline="", encoding="utf-8") as file:
         trade_rows = list(csv.DictReader(file))
-    assert [row["symbol"] for row in trade_rows] == ["ETHUSDT", "SOLUSDT"]
-    assert [row["accepted"] for row in trade_rows] == ["True", "True"]
+    assert sorted(row["symbol"] for row in trade_rows) == ["ETHUSDT", "ETHUSDT", "SOLUSDT", "SOLUSDT"]
+    assert sorted(row["accepted"] for row in trade_rows) == ["False", "False", "True", "True"]
 
 
 def test_portfolio_cost_feasible_selection_skips_high_friction_entries(tmp_path) -> None:
@@ -1307,7 +1314,7 @@ def test_portfolio_cost_feasible_selection_skips_high_friction_entries(tmp_path)
 
     with Path(window.trade_csv_path or "").open(newline="", encoding="utf-8") as file:
         trade_rows = list(csv.DictReader(file))
-    assert [row["accepted"] for row in trade_rows] == ["False", "True"]
+    assert [row["accepted"] for row in trade_rows] == ["False", "True", "False", "False"]
     assert trade_rows[0]["symbol"] == "DOGEUSDT"
     assert trade_rows[0]["blocker"] == "portfolio_selection_cost_feasibility"
 
@@ -1566,6 +1573,7 @@ def _fake_symbol_batch_factory(
             metrics_path = artifact_dir / f"{run_id}-metrics.csv"
             trades_path = artifact_dir / f"{run_id}-trades.csv"
             entry_features_path = artifact_dir / f"{run_id}-entry-feature-snapshots.csv"
+            lifecycle_path = artifact_dir / f"{run_id}-lifecycle-state-audit.csv"
             parameters_path = artifact_dir / f"{run_id}-parameters.json"
             manifest_path = artifact_dir / f"{run_id}-dataset-manifest.json"
             metrics_path.write_text(
@@ -1590,6 +1598,12 @@ def _fake_symbol_batch_factory(
                 f"{run_id}-1,{symbol},2024-01-01T00:00:00+00:00,{net_profit},{h1_trend},{h4_trend},{d1_trend}\n",
                 encoding="utf-8",
             )
+            lifecycle_path.write_text(
+                "trade_id,candidate_id,symbol,side,entry_time,entry_index,score,accepted,blocker,furthest_lifecycle_state,candidate_time,exit_time,net_pnl,gross_pnl,total_cost,lifecycle_level_found,lifecycle_compression,lifecycle_approach,lifecycle_breakout,lifecycle_confirmation,lifecycle_retest,lifecycle_continuation,lifecycle_failure_exit\n"
+                f"{run_id}-1,{run_id}-candidate-1,{symbol},long,2024-01-01T00:00:00+00:00,1,80,True,,continuation,2024-01-01T00:00:00+00:00,2024-01-01T01:00:00+00:00,{net_profit},110,10,True,True,True,True,True,False,True,False\n"
+                f"unavailable,{run_id}-candidate-skip,{symbol},long,2024-01-01T00:15:00+00:00,2,40,False,skipped_min_entry_score,breakout,2024-01-01T00:15:00+00:00,2024-01-01T00:15:00+00:00,0,0,0,True,True,True,True,False,False,False,False\n",
+                encoding="utf-8",
+            )
             parameters_path.write_text(
                 json.dumps({"research_gate_skip_counts": {}, "exit_profile_counts": {}}, sort_keys=True),
                 encoding="utf-8",
@@ -1605,6 +1619,7 @@ def _fake_symbol_batch_factory(
                 str(metrics_path),
                 str(trades_path),
                 str(entry_features_path),
+                str(lifecycle_path),
                 str(parameters_path),
                 str(manifest_path),
             ]

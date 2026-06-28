@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime
@@ -27,6 +27,17 @@ from src.app.breakout.experiments.crypto_batch import (
 from src.app.breakout.experiments.crypto_symbols import resolve_crypto_research_universe
 from src.app.breakout.normalizer import to_utc
 
+LIFECYCLE_STATES: tuple[str, ...] = (
+    "level_found",
+    "compression",
+    "approach",
+    "breakout",
+    "confirmation",
+    "retest",
+    "continuation",
+    "failure_exit",
+)
+
 RunSymbolBatchCallable = Callable[..., BatchExperimentResult]
 
 
@@ -45,7 +56,10 @@ class PortfolioTrade(BaseModel):
     blocker: str | None = None
     regime_label: Literal["bull_long", "bear_short_or_avoid", "neutral_blocked"] = "neutral_blocked"
     regime_decision: Literal["long_enabled", "risk_off_blocked"] = "risk_off_blocked"
+    furthest_lifecycle_state: str = "unavailable"
+    lifecycle_state_counts: dict[str, int] = Field(default_factory=dict)
     source_trade_id: str | None = None
+    source_candidate_id: str | None = None
     source_artifact_dir: str | None = None
 
 
@@ -76,6 +90,7 @@ class PortfolioWindowSummary(BaseModel):
     accepted_trade_count: int = 0
     skipped_exposure_trade_count: int = 0
     selection_skip_counts: dict[str, int] = Field(default_factory=dict)
+    lifecycle_state_counts: dict[str, int] = Field(default_factory=dict)
     net_profit: float = 0.0
     max_drawdown: float | None = None
     profit_factor: float | None = None
@@ -99,6 +114,7 @@ class PortfolioRegimeContribution(BaseModel):
     trade_count: int = 0
     accepted_trade_count: int = 0
     skipped_blocked_signal_count: int = 0
+    lifecycle_state_counts: dict[str, int] = Field(default_factory=dict)
     pnl_contribution: float = 0.0
     drawdown_contribution: float = 0.0
 
@@ -431,6 +447,12 @@ def _read_trade_rows(
             )
         ]
     feature_rows = _read_entry_feature_rows(artifact_dir)
+    lifecycle_rows = _read_lifecycle_audit_rows(artifact_dir)
+    lifecycle_by_trade = {
+        str(row.get("trade_id")): row
+        for row in lifecycle_rows
+        if str(row.get("trade_id") or "") not in {"", "unavailable"}
+    }
     output: list[PortfolioTrade] = []
     for trade_path in trade_paths:
         with trade_path.open(newline="", encoding="utf-8") as file:
@@ -441,6 +463,7 @@ def _read_trade_rows(
                 entry_price = _float(row.get("entry_price"))
                 trade_id = str(row.get("trade_id") or "")
                 regime_label, regime_decision = _classify_trade_regime(feature_rows.get(trade_id, {}))
+                lifecycle = lifecycle_by_trade.get(trade_id, {})
                 output.append(
                     PortfolioTrade(
                         symbol=contribution.symbol,
@@ -453,10 +476,38 @@ def _read_trade_rows(
                         notional=abs(quantity * entry_price),
                         regime_label=regime_label,
                         regime_decision=regime_decision,
+                        furthest_lifecycle_state=str(
+                            lifecycle.get("furthest_lifecycle_state") or "unavailable"
+                        ),
+                        lifecycle_state_counts=_lifecycle_state_counts([lifecycle]),
                         source_trade_id=trade_id,
+                        source_candidate_id=_optional_str(lifecycle.get("candidate_id")),
                         source_artifact_dir=str(artifact_dir),
                     )
                 )
+    for lifecycle in lifecycle_rows:
+        if _boolish(lifecycle.get("accepted")):
+            continue
+        candidate_time = to_utc(
+            datetime.fromisoformat(str(lifecycle["candidate_time"]).replace("Z", "+00:00"))
+        )
+        output.append(
+            PortfolioTrade(
+                symbol=contribution.symbol,
+                window_label=window.label,
+                entry_time=candidate_time,
+                exit_time=candidate_time,
+                net_pnl=0.0,
+                accepted=False,
+                blocker=_optional_str(lifecycle.get("blocker")) or "source_candidate_skipped",
+                regime_label="neutral_blocked",
+                regime_decision="risk_off_blocked",
+                furthest_lifecycle_state=str(lifecycle.get("furthest_lifecycle_state") or "unavailable"),
+                lifecycle_state_counts=_lifecycle_state_counts([lifecycle]),
+                source_candidate_id=_optional_str(lifecycle.get("candidate_id")),
+                source_artifact_dir=str(artifact_dir),
+            )
+        )
     return output
 
 
@@ -471,6 +522,15 @@ def _read_entry_feature_rows(artifact_dir: Path) -> dict[str, dict[str, str]]:
                 trade_id = str(row.get("trade_id") or "")
                 if trade_id:
                     output[trade_id] = dict(row)
+    return output
+
+
+def _read_lifecycle_audit_rows(artifact_dir: Path) -> list[dict[str, str]]:
+    lifecycle_paths = sorted(artifact_dir.glob("*-lifecycle-state-audit.csv"))
+    output: list[dict[str, str]] = []
+    for lifecycle_path in lifecycle_paths:
+        with lifecycle_path.open(newline="", encoding="utf-8") as file:
+            output.extend(dict(row) for row in csv.DictReader(file))
     return output
 
 
@@ -561,6 +621,7 @@ def _portfolio_window_summary(
         accepted_trade_count=accepted_count,
         skipped_exposure_trade_count=skipped_count,
         selection_skip_counts=selection_skip_counts,
+        lifecycle_state_counts=_trade_lifecycle_state_counts(accepted),
         net_profit=net_profit,
         max_drawdown=max_drawdown,
         profit_factor=profit_factor,
@@ -591,6 +652,9 @@ def _apply_exposure_caps(
     for trade in trades:
         open_trades = [item for item in open_trades if item.exit_time > trade.entry_time]
         current_open = sum(item.notional for item in open_trades if item.accepted)
+        if not trade.accepted:
+            accepted.append(trade)
+            continue
         if trade.regime_decision != "long_enabled":
             rejected = trade.model_copy(
                 update={"accepted": False, "blocker": f"portfolio_regime_{trade.regime_label}"}
@@ -692,6 +756,7 @@ def _regime_contributions(
                 trade_count=len(regime_trades),
                 accepted_trade_count=len(accepted),
                 skipped_blocked_signal_count=sum(1 for trade in regime_trades if not trade.accepted),
+                lifecycle_state_counts=_trade_lifecycle_state_counts(regime_trades),
                 pnl_contribution=pnl,
                 drawdown_contribution=min(pnl, 0.0) / 10_000.0,
             )
@@ -1069,6 +1134,34 @@ def _jsonable(value: Any) -> Any:
     return value
 
 
+def _boolish(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes"}
+
+
+def _optional_str(value: object) -> str | None:
+    if value is None or value == "":
+        return None
+    return str(value)
+
+
+def _lifecycle_state_counts(rows: Iterable[Mapping[str, object]]) -> dict[str, int]:
+    return {
+        state: sum(1 for row in rows if _boolish(row.get(f"lifecycle_{state}")))
+        for state in LIFECYCLE_STATES
+    }
+
+
+def _trade_lifecycle_state_counts(trades: Iterable[PortfolioTrade]) -> dict[str, int]:
+    counts = {state: 0 for state in LIFECYCLE_STATES}
+    for trade in trades:
+        for state, value in trade.lifecycle_state_counts.items():
+            if state in counts:
+                counts[state] += int(value)
+    return counts
+
+
 def _float(value: object) -> float:
     if value is None or value == "":
         return 0.0
@@ -1086,6 +1179,7 @@ def _write_portfolio_scorecard(path: Path, windows: list[PortfolioWindowSummary]
             "accepted_trade_count",
             "skipped_exposure_trade_count",
             "selection_skip_counts_json",
+            "lifecycle_state_counts_json",
             "net_profit",
             "net_profit_buffer",
             "profit_factor",
@@ -1105,6 +1199,9 @@ def _write_portfolio_scorecard(path: Path, windows: list[PortfolioWindowSummary]
                 "blockers": ";".join(window.blockers),
                 "selection_skip_counts_json": json.dumps(
                     window.selection_skip_counts, sort_keys=True, ensure_ascii=False
+                ),
+                "lifecycle_state_counts_json": json.dumps(
+                    window.lifecycle_state_counts, sort_keys=True, ensure_ascii=False
                 ),
             }
             for window in windows
@@ -1153,7 +1250,10 @@ def _write_portfolio_trades(path: Path, trades: list[PortfolioTrade]) -> None:
             "blocker",
             "regime_label",
             "regime_decision",
+            "furthest_lifecycle_state",
+            "lifecycle_state_counts",
             "source_trade_id",
+            "source_candidate_id",
             "source_artifact_dir",
         ],
         [trade.model_dump(mode="json") for trade in trades],
@@ -1170,6 +1270,7 @@ def _write_regime_contributions(path: Path, rows: list[PortfolioRegimeContributi
             "trade_count",
             "accepted_trade_count",
             "skipped_blocked_signal_count",
+            "lifecycle_state_counts",
             "pnl_contribution",
             "drawdown_contribution",
         ],
