@@ -489,6 +489,34 @@ class BacktestEngine:
         if current["close"] <= candidate.breakout_level:
             gate_state.skip_counts["skipped_confirmation_close_not_above_breakout"] += 1
             return None, None
+        heikin_ashi_snapshot = _heikin_ashi_feature_snapshot(all_bars[: index + 1])
+        if filters.require_heikin_ashi_bullish and heikin_ashi_snapshot.get("feature_ha_color") != "bullish":
+            gate_state.skip_counts["skipped_confirmation_heikin_ashi_not_bullish"] += 1
+            return None, None
+        if filters.min_heikin_ashi_body_ratio is not None:
+            body_ratio = heikin_ashi_snapshot.get("feature_ha_body_range_ratio")
+            if not isinstance(body_ratio, int | float):
+                gate_state.skip_counts["skipped_confirmation_heikin_ashi_body_ratio_unavailable"] += 1
+                return None, None
+            if body_ratio < filters.min_heikin_ashi_body_ratio:
+                gate_state.skip_counts["skipped_confirmation_heikin_ashi_body_ratio_below_min"] += 1
+                return None, None
+        if filters.max_heikin_ashi_upper_wick_ratio is not None:
+            upper_wick_ratio = heikin_ashi_snapshot.get("feature_ha_upper_wick_range_ratio")
+            if not isinstance(upper_wick_ratio, int | float):
+                gate_state.skip_counts["skipped_confirmation_heikin_ashi_upper_wick_unavailable"] += 1
+                return None, None
+            if upper_wick_ratio > filters.max_heikin_ashi_upper_wick_ratio:
+                gate_state.skip_counts["skipped_confirmation_heikin_ashi_upper_wick_above_cap"] += 1
+                return None, None
+        if filters.min_heikin_ashi_color_streak is not None:
+            color_streak = heikin_ashi_snapshot.get("feature_ha_color_streak")
+            if not isinstance(color_streak, int | float):
+                gate_state.skip_counts["skipped_confirmation_heikin_ashi_color_streak_unavailable"] += 1
+                return None, None
+            if color_streak < filters.min_heikin_ashi_color_streak:
+                gate_state.skip_counts["skipped_confirmation_heikin_ashi_color_streak_below_min"] += 1
+                return None, None
         if filters.min_close_position is not None:
             current_range = current["high"] - current["low"]
             if current_range <= 0:
@@ -502,6 +530,7 @@ class BacktestEngine:
         if candidate.confirmed_closes < filters.required_closes_above_breakout:
             return None, candidate
         feature_snapshot = dict(candidate.feature_snapshot)
+        feature_snapshot.update(heikin_ashi_snapshot)
         feature_snapshot.update(
             {
                 "feature_confirmation_candidate_index": candidate.candidate_index,
@@ -842,12 +871,17 @@ class BacktestEngine:
                 profile.favorable_timeout_atr,
             )
         )
-        if not requires_atr:
+        requires_exit_scan = bool(
+            requires_atr
+            or profile.heikin_ashi_exit_on_bearish
+            or profile.heikin_ashi_exit_max_upper_wick_ratio is not None
+        )
+        if not requires_exit_scan:
             return fallback_bar, fallback_bar["close"], fallback_holding, fallback_reason
         atr = feature_snapshot.get("feature_atr")
-        if not isinstance(atr, int | float) or atr <= 0:
+        if requires_atr and (not isinstance(atr, int | float) or atr <= 0):
             return fallback_bar, fallback_bar["close"], fallback_holding, "missing_entry_atr_fixed_holding_close"
-        atr_value = float(atr)
+        atr_value = float(atr) if isinstance(atr, int | float) else 0.0
         stop_price = entry_price - float(profile.stop_atr) * atr_value if profile.stop_atr else None
         target_price = entry_price + float(profile.target_atr) * atr_value if profile.target_atr else None
         breakeven_activation = (
@@ -880,6 +914,19 @@ class BacktestEngine:
         trailing_high: float | None = None
         max_favorable_high = entry_price
         for offset, bar in enumerate(bars[: profile.fixed_holding_bars], start=1):
+            heikin_ashi_snapshot = _heikin_ashi_feature_snapshot(bars[:offset])
+            if (
+                profile.heikin_ashi_exit_on_bearish
+                and heikin_ashi_snapshot.get("feature_ha_color") == "bearish"
+            ):
+                return bar, bar["close"], offset, "heikin_ashi_bearish_exit"
+            if profile.heikin_ashi_exit_max_upper_wick_ratio is not None:
+                upper_wick_ratio = heikin_ashi_snapshot.get("feature_ha_upper_wick_range_ratio")
+                if (
+                    isinstance(upper_wick_ratio, int | float)
+                    and upper_wick_ratio > profile.heikin_ashi_exit_max_upper_wick_ratio
+                ):
+                    return bar, bar["close"], offset, "heikin_ashi_upper_wick_exit"
             max_favorable_high = max(max_favorable_high, bar["high"])
             if stop_price is not None and bar["low"] <= stop_price:
                 return bar, stop_price, offset, "atr_stop"
@@ -969,6 +1016,8 @@ class BacktestEngine:
                 gate_state.last_trade_net_pnl is not None and gate_state.last_trade_net_pnl < 0
             ),
         }
+        if self._heikin_ashi_feature_view_enabled():
+            snapshot.update(_heikin_ashi_feature_snapshot(history))
         snapshot.update(
             _context_feature_snapshot(
                 self.context_bars,
@@ -977,6 +1026,23 @@ class BacktestEngine:
             )
         )
         return snapshot
+
+    def _heikin_ashi_feature_view_enabled(self) -> bool:
+        feature_filters = self.config.feature_filters
+        confirmation_filters = self.config.confirmation_filters
+        exit_profile = self.config.exit_profile
+        return bool(
+            feature_filters.require_heikin_ashi_bullish
+            or feature_filters.min_heikin_ashi_body_ratio is not None
+            or feature_filters.max_heikin_ashi_upper_wick_ratio is not None
+            or feature_filters.min_heikin_ashi_color_streak is not None
+            or confirmation_filters.require_heikin_ashi_bullish
+            or confirmation_filters.min_heikin_ashi_body_ratio is not None
+            or confirmation_filters.max_heikin_ashi_upper_wick_ratio is not None
+            or confirmation_filters.min_heikin_ashi_color_streak is not None
+            or exit_profile.heikin_ashi_exit_on_bearish
+            or exit_profile.heikin_ashi_exit_max_upper_wick_ratio is not None
+        )
 
     def _research_gate_reason(
         self,
@@ -1053,6 +1119,27 @@ class BacktestEngine:
                 return "skipped_feature_candle_body_ratio_unavailable"
             if body_ratio > filters.max_candle_body_ratio:
                 return "skipped_feature_candle_body_ratio_above_cap"
+        if filters.require_heikin_ashi_bullish:
+            if feature_snapshot.get("feature_ha_color") != "bullish":
+                return "skipped_feature_heikin_ashi_not_bullish"
+        if filters.min_heikin_ashi_body_ratio is not None:
+            body_ratio = feature_snapshot.get("feature_ha_body_range_ratio")
+            if not isinstance(body_ratio, int | float):
+                return "skipped_feature_heikin_ashi_body_ratio_unavailable"
+            if body_ratio < filters.min_heikin_ashi_body_ratio:
+                return "skipped_feature_heikin_ashi_body_ratio_below_min"
+        if filters.max_heikin_ashi_upper_wick_ratio is not None:
+            upper_wick_ratio = feature_snapshot.get("feature_ha_upper_wick_range_ratio")
+            if not isinstance(upper_wick_ratio, int | float):
+                return "skipped_feature_heikin_ashi_upper_wick_unavailable"
+            if upper_wick_ratio > filters.max_heikin_ashi_upper_wick_ratio:
+                return "skipped_feature_heikin_ashi_upper_wick_above_cap"
+        if filters.min_heikin_ashi_color_streak is not None:
+            color_streak = feature_snapshot.get("feature_ha_color_streak")
+            if not isinstance(color_streak, int | float):
+                return "skipped_feature_heikin_ashi_color_streak_unavailable"
+            if color_streak < filters.min_heikin_ashi_color_streak:
+                return "skipped_feature_heikin_ashi_color_streak_below_min"
         return None
 
     def _update_gate_state(
@@ -1541,6 +1628,83 @@ def _volume_ratio(history: Sequence[Bar], lookback: int = 20) -> float | str:
     return history[-1]["volume"] / average if average > 0 else "unavailable"
 
 
+def _heikin_ashi_feature_snapshot(history: Sequence[Bar]) -> dict[str, float | int | str | bool]:
+    if not history:
+        return {
+            "feature_ha_available": False,
+            "feature_ha_reason": "no_history",
+            "feature_ha_color": "unavailable",
+            "feature_ha_color_streak": "unavailable",
+            "feature_ha_body_range_ratio": "unavailable",
+            "feature_ha_upper_wick_range_ratio": "unavailable",
+            "feature_ha_lower_wick_range_ratio": "unavailable",
+            "feature_ha_close_position": "unavailable",
+            "feature_ha_trend_persistence": "unavailable",
+            "feature_ha_compression": "unavailable",
+            "feature_ha_reversal_hint": "unavailable",
+            "feature_ha_failed_continuation_hint": "unavailable",
+        }
+    ha_rows: list[dict[str, float | str]] = []
+    previous_ha_open: float | None = None
+    previous_ha_close: float | None = None
+    for bar in history:
+        ha_close = (bar["open"] + bar["high"] + bar["low"] + bar["close"]) / 4.0
+        if previous_ha_open is None or previous_ha_close is None:
+            ha_open = (bar["open"] + bar["close"]) / 2.0
+        else:
+            ha_open = (previous_ha_open + previous_ha_close) / 2.0
+        ha_high = max(bar["high"], ha_open, ha_close)
+        ha_low = min(bar["low"], ha_open, ha_close)
+        color = "bullish" if ha_close >= ha_open else "bearish"
+        ha_rows.append(
+            {
+                "open": ha_open,
+                "high": ha_high,
+                "low": ha_low,
+                "close": ha_close,
+                "color": color,
+            }
+        )
+        previous_ha_open = ha_open
+        previous_ha_close = ha_close
+    current = ha_rows[-1]
+    current_range = max(float(current["high"]) - float(current["low"]), 1e-9)
+    body = abs(float(current["close"]) - float(current["open"]))
+    upper_wick = float(current["high"]) - max(float(current["open"]), float(current["close"]))
+    lower_wick = min(float(current["open"]), float(current["close"])) - float(current["low"])
+    color = str(current["color"])
+    color_streak = 0
+    for row in reversed(ha_rows):
+        if row["color"] != color:
+            break
+        color_streak += 1
+    previous_color = str(ha_rows[-2]["color"]) if len(ha_rows) > 1 else color
+    return {
+        "feature_ha_available": True,
+        "feature_ha_source": "derived_from_raw_ohlcv",
+        "feature_ha_seed_rule": "first_ha_open_raw_open_close_midpoint",
+        "feature_ha_color": color,
+        "feature_ha_color_streak": color_streak,
+        "feature_ha_body_range_ratio": body / current_range,
+        "feature_ha_upper_wick_range_ratio": max(0.0, upper_wick) / current_range,
+        "feature_ha_lower_wick_range_ratio": max(0.0, lower_wick) / current_range,
+        "feature_ha_close_position": (float(current["close"]) - float(current["low"])) / current_range,
+        "feature_ha_trend_persistence": min(color_streak / 5.0, 1.0),
+        "feature_ha_compression": _heikin_ashi_compression(ha_rows),
+        "feature_ha_reversal_hint": bool(len(ha_rows) > 1 and color != previous_color),
+        "feature_ha_failed_continuation_hint": bool(color == "bearish" or (upper_wick / current_range) > 0.45),
+    }
+
+
+def _heikin_ashi_compression(ha_rows: Sequence[Mapping[str, float | str]], lookback: int = 20) -> float | str:
+    if not ha_rows:
+        return "unavailable"
+    recent = ha_rows[-lookback:]
+    span = max(float(row["high"]) for row in recent) - min(float(row["low"]) for row in recent)
+    latest_range = float(ha_rows[-1]["high"]) - float(ha_rows[-1]["low"])
+    return latest_range / span if span > 0 else "unavailable"
+
+
 def _timeframe_seconds(timeframe: str) -> int:
     mapping = {
         "M1": 60,
@@ -2013,6 +2177,7 @@ def build_report(
     unavailable.update(unavailable_reasons or {})
     parameter_snapshot = config.model_dump(mode="json")
     parameter_snapshot["research_gate_skip_counts"] = dict(sorted((gate_skip_counts or {}).items()))
+    parameter_snapshot["heikin_ashi_feature_usage"] = _heikin_ashi_usage_snapshot(config)
     parameter_snapshot["exit_profile_counts"] = dict(
         sorted(Counter(str(trade.metadata.get("exit_reason", "unknown")) for trade in trades).items())
     )
@@ -2076,6 +2241,34 @@ def build_report(
         path_risk_diagnostics=path_risk_diagnostics,
         path_risk_threshold_summary=path_risk_summaries,
     )
+
+
+def _heikin_ashi_usage_snapshot(config: BacktestConfig) -> dict[str, object]:
+    feature_filters = config.feature_filters
+    confirmation_filters = config.confirmation_filters
+    exit_profile = config.exit_profile
+    enabled = bool(
+        feature_filters.require_heikin_ashi_bullish
+        or feature_filters.min_heikin_ashi_body_ratio is not None
+        or feature_filters.max_heikin_ashi_upper_wick_ratio is not None
+        or feature_filters.min_heikin_ashi_color_streak is not None
+        or confirmation_filters.require_heikin_ashi_bullish
+        or confirmation_filters.min_heikin_ashi_body_ratio is not None
+        or confirmation_filters.max_heikin_ashi_upper_wick_ratio is not None
+        or confirmation_filters.min_heikin_ashi_color_streak is not None
+        or exit_profile.heikin_ashi_exit_on_bearish
+        or exit_profile.heikin_ashi_exit_max_upper_wick_ratio is not None
+    )
+    return {
+        "enabled": enabled,
+        "source": "derived_from_raw_ohlcv" if enabled else "disabled",
+        "seed_rule": "first_ha_open_raw_open_close_midpoint" if enabled else "disabled",
+        "accounting_source": "raw_ohlcv",
+        "execution_prices_source": "raw_ohlcv",
+        "pnl_cost_equity_source": "raw_ohlcv",
+        "derived_features_only": enabled,
+        "warning": "Heikin-Ashi OHLC is never used for fills, stops, costs, PnL, equity, or drawdown.",
+    }
 
 
 def stable_hash(value: Any) -> str:

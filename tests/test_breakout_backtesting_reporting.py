@@ -538,6 +538,66 @@ def test_missing_context_feature_markers_do_not_fail_backtest() -> None:
     assert row["feature_context_H1_reason"] == "not_supplied_or_no_closed_bar"
 
 
+def test_heikin_ashi_feature_snapshot_is_opt_in_causal_and_derived_only() -> None:
+    bars = breakout_dataset()
+    ha_config = config().model_copy(
+        update={"feature_filters": BacktestFeatureFilterConfig(min_heikin_ashi_body_ratio=0.0)}
+    )
+
+    base_row = entry_feature_snapshots(BacktestEngine(ha_config).run(bars).trades)[0]
+    mutated_future = [*bars]
+    mutated_future[9] = Bar(**{**mutated_future[9], "high": 999.0, "low": 1.0, "close": 500.0})
+    mutated_row = entry_feature_snapshots(BacktestEngine(ha_config).run(mutated_future).trades)[0]
+    default_row = entry_feature_snapshots(BacktestEngine(config()).run(bars).trades)[0]
+
+    assert base_row["feature_ha_available"] is True
+    assert base_row["feature_ha_source"] == "derived_from_raw_ohlcv"
+    assert base_row["feature_ha_seed_rule"] == "first_ha_open_raw_open_close_midpoint"
+    assert "feature_ha_body_range_ratio" in base_row
+    assert "feature_ha_compression" in base_row
+    assert "feature_ha_open" not in base_row
+    assert "feature_ha_close" not in base_row
+    assert {key: value for key, value in mutated_row.items() if key.startswith("feature_ha_")} == {
+        key: value for key, value in base_row.items() if key.startswith("feature_ha_")
+    }
+    assert all(not key.startswith("feature_ha_") for key in default_row)
+
+
+def test_heikin_ashi_exit_uses_raw_close_and_discloses_raw_accounting() -> None:
+    future_bars = [
+        make_bar(8, high=108.0, low=104.0, close=107.0, open_=107.4),
+        make_bar(9, high=107.2, low=102.0, close=103.0, open_=106.8),
+    ]
+    engine = BacktestEngine(
+        config().model_copy(
+            update={
+                "exit_profile": BacktestExitProfileConfig(
+                    fixed_holding_bars=2,
+                    heikin_ashi_exit_on_bearish=True,
+                )
+            }
+        )
+    )
+
+    exit_bar, raw_exit_price, holding_bars, exit_reason = engine._resolve_exit(
+        entry_price=107.0,
+        next_bar=future_bars[0],
+        future_bars=future_bars,
+        feature_snapshot={"feature_atr": "unavailable"},
+    )
+    report = engine.run(breakout_dataset())
+
+    assert exit_bar == future_bars[0]
+    assert raw_exit_price == pytest.approx(future_bars[0]["close"])
+    assert holding_bars == 1
+    assert exit_reason == "heikin_ashi_bearish_exit"
+    usage = report.parameter_snapshot["heikin_ashi_feature_usage"]
+    assert isinstance(usage, dict)
+    assert usage["enabled"] is True
+    assert usage["accounting_source"] == "raw_ohlcv"
+    assert usage["execution_prices_source"] == "raw_ohlcv"
+
+
 def test_feature_bucket_regime_and_worst_day_diagnostics_are_deterministic() -> None:
     report = BacktestEngine(config()).run([*breakout_dataset(), make_bar(11, high=110.0, low=80.0, close=100.0)])
 

@@ -417,6 +417,10 @@ class BacktestFeatureFilterConfig(BaseModel):
     max_breakout_distance_atr: float | None = Field(default=None, gt=0)
     min_candle_body_ratio: float | None = Field(default=None, ge=0)
     max_candle_body_ratio: float | None = Field(default=None, gt=0)
+    require_heikin_ashi_bullish: bool | None = None
+    min_heikin_ashi_body_ratio: float | None = Field(default=None, ge=0, le=1)
+    max_heikin_ashi_upper_wick_ratio: float | None = Field(default=None, ge=0, le=1)
+    min_heikin_ashi_color_streak: int | None = Field(default=None, ge=1)
 
     @property
     def configured(self) -> bool:
@@ -427,6 +431,10 @@ class BacktestFeatureFilterConfig(BaseModel):
             or self.max_breakout_distance_atr is not None
             or self.min_candle_body_ratio is not None
             or self.max_candle_body_ratio is not None
+            or self.require_heikin_ashi_bullish
+            or self.min_heikin_ashi_body_ratio is not None
+            or self.max_heikin_ashi_upper_wick_ratio is not None
+            or self.min_heikin_ashi_color_streak is not None
         )
 
     @model_validator(mode="after")
@@ -447,6 +455,10 @@ class BacktestConfirmationFilterConfig(BaseModel):
     required_closes_above_breakout: int = Field(default=0, ge=0, le=2)
     min_close_position: float | None = Field(default=None, ge=0, le=1)
     cancel_on_return_inside_range: bool = False
+    require_heikin_ashi_bullish: bool | None = None
+    min_heikin_ashi_body_ratio: float | None = Field(default=None, ge=0, le=1)
+    max_heikin_ashi_upper_wick_ratio: float | None = Field(default=None, ge=0, le=1)
+    min_heikin_ashi_color_streak: int | None = Field(default=None, ge=1)
 
     @property
     def configured(self) -> bool:
@@ -454,6 +466,10 @@ class BacktestConfirmationFilterConfig(BaseModel):
             self.required_closes_above_breakout > 0
             or self.min_close_position is not None
             or self.cancel_on_return_inside_range
+            or self.require_heikin_ashi_bullish
+            or self.min_heikin_ashi_body_ratio is not None
+            or self.max_heikin_ashi_upper_wick_ratio is not None
+            or self.min_heikin_ashi_color_streak is not None
         )
 
     @model_validator(mode="after")
@@ -492,6 +508,8 @@ class BacktestExitProfileConfig(BaseModel):
     partial_targets: tuple[BacktestPartialExitTargetConfig, ...] | None = None
     partial_residual_breakeven: bool | None = None
     partial_residual_trailing_giveback_atr: float | None = Field(default=None, gt=0)
+    heikin_ashi_exit_on_bearish: bool | None = None
+    heikin_ashi_exit_max_upper_wick_ratio: float | None = Field(default=None, ge=0, le=1)
 
     @property
     def configured(self) -> bool:
@@ -510,6 +528,8 @@ class BacktestExitProfileConfig(BaseModel):
             or bool(self.partial_targets)
             or self.partial_residual_breakeven
             or self.partial_residual_trailing_giveback_atr is not None
+            or self.heikin_ashi_exit_on_bearish
+            or self.heikin_ashi_exit_max_upper_wick_ratio is not None
         )
 
     @model_validator(mode="after")

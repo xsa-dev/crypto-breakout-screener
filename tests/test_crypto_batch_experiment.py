@@ -323,6 +323,77 @@ def test_batch_runner_records_confirmation_filter_profile(tmp_path) -> None:
     assert summary["confirmation_filter_settings"] == row.confirmation_filter_settings
 
 
+def test_batch_runner_records_heikin_ashi_named_profiles(tmp_path) -> None:
+    windows = [
+        BatchWindow(
+            label="ha",
+            start=datetime(2024, 1, 1, tzinfo=UTC),
+            end=datetime(2024, 1, 2, tzinfo=UTC),
+        )
+    ]
+    seen_feature_filters: list[dict[str, Any]] = []
+    seen_confirmation_filters: list[dict[str, Any]] = []
+    seen_exit_profiles: list[dict[str, Any]] = []
+
+    def run_single(**kwargs: Any) -> CryptoExperimentResult:
+        seen_feature_filters.append(kwargs["feature_filters"].model_dump(mode="json"))
+        seen_confirmation_filters.append(kwargs["confirmation_filters"].model_dump(mode="json"))
+        seen_exit_profiles.append(kwargs["exit_profile"].model_dump(mode="json", exclude_defaults=True))
+        return _fake_run_factory(tmp_path)(**kwargs)
+
+    trend = run_batch_experiment(
+        windows=windows,
+        output_dir=tmp_path / "trend",
+        market_data_dir=tmp_path / "market-data",
+        gate_profile="heikin-ashi-trend-filter-v1",
+        download=_fake_download_factory(tmp_path),
+        run_single=run_single,
+    )
+    assert trend.summary.feature_filter_profile == "heikin-ashi-trend-filter-v1"
+    assert trend.summary.heikin_ashi_feature_profile == "heikin-ashi-trend-filter-v1"
+    assert trend.summary.heikin_ashi_usage["enabled"] is True
+    assert trend.summary.heikin_ashi_usage["accounting_source"] == "raw_ohlcv"
+    assert seen_feature_filters[-1]["require_heikin_ashi_bullish"] is True
+    assert seen_feature_filters[-1]["min_heikin_ashi_body_ratio"] == 0.35
+
+    confirmation = run_batch_experiment(
+        windows=windows,
+        output_dir=tmp_path / "confirmation",
+        market_data_dir=tmp_path / "market-data",
+        gate_profile="heikin-ashi-confirmation-v1",
+        download=_fake_download_factory(tmp_path),
+        run_single=run_single,
+    )
+    assert confirmation.summary.confirmation_filter_profile == "heikin-ashi-confirmation-v1"
+    assert confirmation.summary.heikin_ashi_confirmation_profile == "heikin-ashi-confirmation-v1"
+    assert confirmation.summary.confirmation_filter_settings["require_heikin_ashi_bullish"] is True
+    assert seen_confirmation_filters[-1]["min_heikin_ashi_color_streak"] == 2
+
+    exit_result = run_batch_experiment(
+        windows=windows,
+        output_dir=tmp_path / "exit",
+        market_data_dir=tmp_path / "market-data",
+        gate_profile="heikin-ashi-exit-v1",
+        download=_fake_download_factory(tmp_path),
+        run_single=run_single,
+    )
+    assert exit_result.summary.exit_profile == "heikin-ashi-exit-v1"
+    assert exit_result.summary.heikin_ashi_exit_profile == "heikin-ashi-exit-v1"
+    assert exit_result.summary.exit_profile_settings == {
+        "fixed_holding_bars": 16,
+        "heikin_ashi_exit_max_upper_wick_ratio": 0.55,
+        "heikin_ashi_exit_on_bearish": True,
+    }
+    assert seen_exit_profiles[-1]["heikin_ashi_exit_on_bearish"] is True
+
+    with exit_result.summary_csv_path.open(newline="", encoding="utf-8") as file:
+        rows = list(csv.DictReader(file))
+    usage = json.loads(rows[0]["heikin_ashi_usage_json"])
+    assert rows[0]["heikin_ashi_exit_profile"] == "heikin-ashi-exit-v1"
+    assert usage["source"] == "derived_from_raw_ohlcv"
+    assert usage["density_source"] == "ohlcv_proxy_or_unavailable"
+
+
 
 def test_batch_runner_records_exit_profile(tmp_path) -> None:
     windows = [

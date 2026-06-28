@@ -52,6 +52,10 @@ BATCH_SUMMARY_COLUMNS = [
     "regime_filter_profile",
     "confirmation_filter_profile",
     "exit_profile",
+    "heikin_ashi_feature_profile",
+    "heikin_ashi_confirmation_profile",
+    "heikin_ashi_exit_profile",
+    "heikin_ashi_usage_json",
     "exposure_profile",
     "status",
     "blockers",
@@ -129,6 +133,10 @@ class BatchWindowSummary(BaseModel):
     regime_filter_profile: str = "none"
     confirmation_filter_profile: str = "none"
     exit_profile: str = "none"
+    heikin_ashi_feature_profile: str = "none"
+    heikin_ashi_confirmation_profile: str = "none"
+    heikin_ashi_exit_profile: str = "none"
+    heikin_ashi_usage: dict[str, Any] = Field(default_factory=dict)
     exposure_profile: str = "none"
     status: Literal["passed", "failed", "blocked"]
     blockers: list[str] = Field(default_factory=list)
@@ -199,6 +207,10 @@ class BatchExperimentSummary(BaseModel):
     regime_filter_profile: str = "none"
     confirmation_filter_profile: str = "none"
     exit_profile: str = "none"
+    heikin_ashi_feature_profile: str = "none"
+    heikin_ashi_confirmation_profile: str = "none"
+    heikin_ashi_exit_profile: str = "none"
+    heikin_ashi_usage: dict[str, Any] = Field(default_factory=dict)
     exposure_profile: str = "none"
     gate_settings: dict[str, Any] = Field(default_factory=dict)
     feature_filter_settings: dict[str, Any] = Field(default_factory=dict)
@@ -260,6 +272,7 @@ QUARTERLY_2023_2024_WINDOWS = (
 )
 
 EXIT_PROFILE_NAMES = {
+    "heikin-ashi-exit-v1",
     "conservative-v1-m15-slope-positive-max-trades-8-hold-2",
     "conservative-v1-m15-slope-positive-max-trades-8-hold-4",
     "conservative-v1-m15-slope-positive-max-trades-8-hold-8",
@@ -324,6 +337,8 @@ def research_gate_profile(name: str) -> BacktestResearchGateConfig:
     if name == "baseline":
         return BacktestResearchGateConfig()
     if name in {
+        "heikin-ashi-trend-filter-v1",
+        "heikin-ashi-confirmation-v1",
         "conservative-v1",
         "conservative-v1-m15-slope-positive",
         "conservative-v1-h1-long",
@@ -375,6 +390,13 @@ def feature_filter_profile(name: str) -> BacktestFeatureFilterConfig:
 
     if name in {"baseline", "conservative-v1", "none"}:
         return BacktestFeatureFilterConfig()
+    if name == "heikin-ashi-trend-filter-v1":
+        return BacktestFeatureFilterConfig(
+            require_heikin_ashi_bullish=True,
+            min_heikin_ashi_body_ratio=0.35,
+            max_heikin_ashi_upper_wick_ratio=0.45,
+            min_heikin_ashi_color_streak=2,
+        )
     if name == "conservative-v1-m15-slope-positive-max-trades-8-atr25-block":
         return BacktestFeatureFilterConfig(
             require_m15_ema_slope_positive=True,
@@ -436,6 +458,7 @@ def _feature_filter_profile_name(gate_profile: str, explicit: str | None = None)
     if explicit is not None:
         return explicit
     if gate_profile in {
+        "heikin-ashi-trend-filter-v1",
         "conservative-v1-m15-slope-positive",
         "conservative-v1-h1-long",
         "conservative-v1-m15-slope-positive-h1-long",
@@ -498,11 +521,36 @@ def _regime_filter_settings(config: BacktestFeatureFilterConfig) -> dict[str, An
     }
 
 
+def _confirmation_filter_settings(config: BacktestConfirmationFilterConfig) -> dict[str, Any]:
+    settings = {
+        "cancel_on_return_inside_range": config.cancel_on_return_inside_range,
+        "min_close_position": config.min_close_position,
+        "required_closes_above_breakout": config.required_closes_above_breakout,
+    }
+    if config.require_heikin_ashi_bullish:
+        settings["require_heikin_ashi_bullish"] = True
+    if config.min_heikin_ashi_body_ratio is not None:
+        settings["min_heikin_ashi_body_ratio"] = config.min_heikin_ashi_body_ratio
+    if config.max_heikin_ashi_upper_wick_ratio is not None:
+        settings["max_heikin_ashi_upper_wick_ratio"] = config.max_heikin_ashi_upper_wick_ratio
+    if config.min_heikin_ashi_color_streak is not None:
+        settings["min_heikin_ashi_color_streak"] = config.min_heikin_ashi_color_streak
+    return settings
+
+
 def confirmation_filter_profile(name: str) -> BacktestConfirmationFilterConfig:
     """Return named local confirmation filters for false-breakout comparison runs."""
 
     if name in {"baseline", "conservative-v1", "none"}:
         return BacktestConfirmationFilterConfig()
+    if name == "heikin-ashi-confirmation-v1":
+        return BacktestConfirmationFilterConfig(
+            required_closes_above_breakout=1,
+            require_heikin_ashi_bullish=True,
+            min_heikin_ashi_body_ratio=0.35,
+            max_heikin_ashi_upper_wick_ratio=0.45,
+            min_heikin_ashi_color_streak=2,
+        )
     if name == "conservative-v1-m15-slope-positive-max-trades-8-confirm-close-1":
         return BacktestConfirmationFilterConfig(required_closes_above_breakout=1)
     if name == "conservative-v1-m15-slope-positive-max-trades-8-confirm-close-2":
@@ -522,6 +570,7 @@ def confirmation_filter_profile(name: str) -> BacktestConfirmationFilterConfig:
 
 def _confirmation_filter_profile_name(gate_profile: str) -> str:
     if gate_profile in {
+        "heikin-ashi-confirmation-v1",
         "conservative-v1-m15-slope-positive-max-trades-8-confirm-close-1",
         "conservative-v1-m15-slope-positive-max-trades-8-confirm-close-2",
         "conservative-v1-m15-slope-positive-max-trades-8-confirm-close-1-closepos70",
@@ -536,6 +585,12 @@ def exit_profile_config(name: str) -> BacktestExitProfileConfig:
 
     if name in {"baseline", "conservative-v1", "none"}:
         return BacktestExitProfileConfig()
+    if name == "heikin-ashi-exit-v1":
+        return BacktestExitProfileConfig(
+            fixed_holding_bars=16,
+            heikin_ashi_exit_on_bearish=True,
+            heikin_ashi_exit_max_upper_wick_ratio=0.55,
+        )
     if name == "conservative-v1-m15-slope-positive-max-trades-8-hold-2":
         return BacktestExitProfileConfig(fixed_holding_bars=2)
     if name == "conservative-v1-m15-slope-positive-max-trades-8-hold-4":
@@ -819,6 +874,38 @@ def _exposure_settings(exposure_profile: str) -> dict[str, float]:
     return {"base_quantity": 0.5}
 
 
+def _heikin_ashi_profiles(
+    *,
+    feature_filter_profile: str,
+    confirmation_filter_profile: str,
+    exit_profile: str,
+) -> dict[str, str]:
+    return {
+        "feature": feature_filter_profile
+        if feature_filter_profile.startswith("heikin-ashi-")
+        else "none",
+        "confirmation": confirmation_filter_profile
+        if confirmation_filter_profile.startswith("heikin-ashi-")
+        else "none",
+        "exit": exit_profile if exit_profile.startswith("heikin-ashi-") else "none",
+    }
+
+
+def _heikin_ashi_usage(profiles: dict[str, str]) -> dict[str, object]:
+    enabled_profiles = {key: value for key, value in profiles.items() if value != "none"}
+    enabled = bool(enabled_profiles)
+    return {
+        "enabled": enabled,
+        "profiles": enabled_profiles,
+        "source": "derived_from_raw_ohlcv" if enabled else "disabled",
+        "seed_rule": "first_ha_open_raw_open_close_midpoint" if enabled else "disabled",
+        "density_source": "ohlcv_proxy_or_unavailable",
+        "accounting_source": "raw_ohlcv",
+        "derived_features_only": enabled,
+        "warning": "Heikin-Ashi is a derived feature view; raw OHLCV is used for fills, stops, costs, PnL, equity, and drawdown.",
+    }
+
+
 def run_batch_experiment(
     *,
     windows: list[BatchWindow],
@@ -857,6 +944,12 @@ def run_batch_experiment(
     active_regime_filter_profile = _regime_filter_profile_name(gate_profile)
     active_confirmation_filter_profile = _confirmation_filter_profile_name(gate_profile)
     active_exit_profile = _exit_profile_name(gate_profile)
+    heikin_ashi_profiles = _heikin_ashi_profiles(
+        feature_filter_profile=active_feature_filter_profile,
+        confirmation_filter_profile=active_confirmation_filter_profile,
+        exit_profile=active_exit_profile,
+    )
+    heikin_ashi_usage = _heikin_ashi_usage(heikin_ashi_profiles)
     active_exposure_profile = _exposure_profile_name(gate_profile)
     active_gates = research_gates or research_gate_profile(gate_profile)
     active_feature_filters = feature_filters or feature_filter_profile(
@@ -874,7 +967,7 @@ def run_batch_experiment(
         active_confirmation_filter_profile
     )
     confirmation_filter_settings = (
-        active_confirmation_filters.model_dump(mode="json")
+        _confirmation_filter_settings(active_confirmation_filters)
         if active_confirmation_filter_profile != "none"
         else {}
     )
@@ -934,6 +1027,10 @@ def run_batch_experiment(
                 regime_filter_profile=active_regime_filter_profile,
                 confirmation_filter_profile=active_confirmation_filter_profile,
                 exit_profile=active_exit_profile,
+                heikin_ashi_feature_profile=heikin_ashi_profiles["feature"],
+                heikin_ashi_confirmation_profile=heikin_ashi_profiles["confirmation"],
+                heikin_ashi_exit_profile=heikin_ashi_profiles["exit"],
+                heikin_ashi_usage=heikin_ashi_usage,
                 exposure_profile=active_exposure_profile,
                 research_gates=active_gates,
                 feature_filters=active_feature_filters,
@@ -964,6 +1061,10 @@ def run_batch_experiment(
                 regime_filter_profile=active_regime_filter_profile,
                 confirmation_filter_profile=active_confirmation_filter_profile,
                 exit_profile=active_exit_profile,
+                heikin_ashi_feature_profile=heikin_ashi_profiles["feature"],
+                heikin_ashi_confirmation_profile=heikin_ashi_profiles["confirmation"],
+                heikin_ashi_exit_profile=heikin_ashi_profiles["exit"],
+                heikin_ashi_usage=heikin_ashi_usage,
                 exposure_profile=active_exposure_profile,
                 gate_settings=gate_settings,
                 feature_filter_settings=feature_filter_settings,
@@ -1007,6 +1108,10 @@ def run_batch_experiment(
         regime_filter_profile=active_regime_filter_profile,
         confirmation_filter_profile=active_confirmation_filter_profile,
         exit_profile=active_exit_profile,
+        heikin_ashi_feature_profile=heikin_ashi_profiles["feature"],
+        heikin_ashi_confirmation_profile=heikin_ashi_profiles["confirmation"],
+        heikin_ashi_exit_profile=heikin_ashi_profiles["exit"],
+        heikin_ashi_usage=heikin_ashi_usage,
         exposure_profile=active_exposure_profile,
         gate_settings=gate_settings,
         feature_filter_settings=feature_filter_settings,
@@ -1102,6 +1207,10 @@ def _run_batch_window(
     regime_filter_profile: str,
     confirmation_filter_profile: str,
     exit_profile: str,
+    heikin_ashi_feature_profile: str,
+    heikin_ashi_confirmation_profile: str,
+    heikin_ashi_exit_profile: str,
+    heikin_ashi_usage: dict[str, object],
     exposure_profile: str,
     research_gates: BacktestResearchGateConfig,
     feature_filters: BacktestFeatureFilterConfig,
@@ -1178,6 +1287,10 @@ def _run_batch_window(
         regime_filter_profile=regime_filter_profile,
         confirmation_filter_profile=confirmation_filter_profile,
         exit_profile=exit_profile,
+        heikin_ashi_feature_profile=heikin_ashi_feature_profile,
+        heikin_ashi_confirmation_profile=heikin_ashi_confirmation_profile,
+        heikin_ashi_exit_profile=heikin_ashi_exit_profile,
+        heikin_ashi_usage=heikin_ashi_usage,
         exposure_profile=exposure_profile,
         gate_settings=research_gates.model_dump(mode="json"),
         feature_filter_settings=feature_filters.model_dump(mode="json"),
@@ -1186,7 +1299,7 @@ def _run_batch_window(
         risk_control_skip_counts=_risk_control_skip_counts(result.artifact_dir / f"{result.run_id}-parameters.json"),
         regime_filter_settings=_regime_filter_settings(feature_filters) if regime_filter_profile != "none" else {},
         regime_filter_skip_counts=_regime_filter_skip_counts(result.artifact_dir / f"{result.run_id}-parameters.json"),
-        confirmation_filter_settings=confirmation_filters.model_dump(mode="json") if confirmation_filter_profile != "none" else {},
+        confirmation_filter_settings=_confirmation_filter_settings(confirmation_filters) if confirmation_filter_profile != "none" else {},
         confirmation_filter_skip_counts=_confirmation_filter_skip_counts(result.artifact_dir / f"{result.run_id}-parameters.json"),
         exit_profile_settings=exit_profile_config.model_dump(
             mode="json",
@@ -1317,6 +1430,13 @@ def _feature_filter_skip_counts(path: Path) -> dict[str, int]:
     feature_reasons = {
         "skipped_feature_m15_ema_slope_not_positive",
         "skipped_feature_h1_trend_not_long",
+        "skipped_feature_heikin_ashi_not_bullish",
+        "skipped_feature_heikin_ashi_body_ratio_unavailable",
+        "skipped_feature_heikin_ashi_body_ratio_below_min",
+        "skipped_feature_heikin_ashi_upper_wick_unavailable",
+        "skipped_feature_heikin_ashi_upper_wick_above_cap",
+        "skipped_feature_heikin_ashi_color_streak_unavailable",
+        "skipped_feature_heikin_ashi_color_streak_below_min",
     }
     return {
         str(key): int(value)
@@ -1953,6 +2073,10 @@ def _csv_row(row: BatchWindowSummary) -> dict[str, str | int | float | None]:
         "regime_filter_profile": row.regime_filter_profile,
         "confirmation_filter_profile": row.confirmation_filter_profile,
         "exit_profile": row.exit_profile,
+        "heikin_ashi_feature_profile": row.heikin_ashi_feature_profile,
+        "heikin_ashi_confirmation_profile": row.heikin_ashi_confirmation_profile,
+        "heikin_ashi_exit_profile": row.heikin_ashi_exit_profile,
+        "heikin_ashi_usage_json": json.dumps(row.heikin_ashi_usage, sort_keys=True),
         "exposure_profile": row.exposure_profile,
         "status": row.status,
         "blockers": ";".join(row.blockers),
