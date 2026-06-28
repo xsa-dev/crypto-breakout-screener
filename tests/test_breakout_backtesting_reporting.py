@@ -161,6 +161,90 @@ def test_favorable_timeout_requires_threshold_and_bar_pair() -> None:
         )
 
 
+def test_confirmation_retest_profile_delays_entry_and_records_lifecycle() -> None:
+    retest_config = config().model_copy(
+        update={
+            "confirmation_filters": BacktestConfirmationFilterConfig(
+                required_closes_above_breakout=1,
+                require_retest=True,
+                retest_window_bars=3,
+                retest_tolerance_atr=5.0,
+            )
+        }
+    )
+
+    report = BacktestEngine(retest_config).run(breakout_dataset())
+
+    assert len(report.trades) == 1
+    trade = report.trades[0]
+    assert trade.entry_time == breakout_dataset()[9]["ts"]
+    assert trade.metadata["feature_confirmation_entry_delay_bars"] == 2
+    assert trade.metadata["feature_retest_entry_delay_bars"] == 1
+    assert trade.metadata["feature_retest_window_bars"] == 3
+    assert report.lifecycle_state_audit[0]["lifecycle_confirmation"] is True
+    assert report.lifecycle_state_audit[0]["lifecycle_retest"] is True
+
+
+def test_required_retest_missing_blocks_without_pnl_or_exposure() -> None:
+    bars = [*breakout_dataset(), make_bar(11, high=112.0, low=110.0, close=111.0)]
+    retest_config = config().model_copy(
+        update={
+            "confirmation_filters": BacktestConfirmationFilterConfig(
+                required_closes_above_breakout=1,
+                require_retest=True,
+                retest_window_bars=1,
+                retest_tolerance_atr=0.01,
+            )
+        }
+    )
+
+    report = BacktestEngine(retest_config).run(bars)
+
+    assert report.trades == []
+    assert report.parameter_snapshot["research_gate_skip_counts"] == {
+        "portfolio_selection_retest_missing": 1
+    }
+    blocked = report.lifecycle_state_audit[0]
+    assert blocked["accepted"] is False
+    assert blocked["blocker"] == "portfolio_selection_retest_missing"
+    assert blocked["net_pnl"] == 0.0
+    assert blocked["lifecycle_confirmation"] is True
+    assert blocked["lifecycle_retest"] is False
+
+
+def test_retest_failure_blocks_with_required_reason_and_no_future_pnl() -> None:
+    bars = breakout_dataset()
+    bars[9] = make_bar(9, high=109.0, low=95.0, close=99.0, open_=108.0)
+    retest_config = config().model_copy(
+        update={
+            "confirmation_filters": BacktestConfirmationFilterConfig(
+                required_closes_above_breakout=1,
+                require_retest=True,
+                retest_window_bars=1,
+                retest_tolerance_atr=5.0,
+            )
+        }
+    )
+
+    report = BacktestEngine(retest_config).run(bars)
+
+    assert report.trades == []
+    assert report.parameter_snapshot["research_gate_skip_counts"] == {
+        "portfolio_selection_retest_failed": 1
+    }
+    blocked = report.lifecycle_state_audit[0]
+    assert blocked["blocker"] == "portfolio_selection_retest_failed"
+    assert blocked["lifecycle_retest"] is True
+    assert blocked["net_pnl"] == 0.0
+
+
+def test_retest_config_requires_confirmation_and_decision_window() -> None:
+    with pytest.raises(ValidationError, match="at least one confirmation close"):
+        BacktestConfirmationFilterConfig(require_retest=True, retest_window_bars=1)
+    with pytest.raises(ValidationError, match="positive retest_window_bars"):
+        BacktestConfirmationFilterConfig(required_closes_above_breakout=1, require_retest=True)
+
+
 def test_backtest_is_deterministic_and_uses_closed_bar_boundary() -> None:
     bars = breakout_dataset()
     engine = BacktestEngine(config())

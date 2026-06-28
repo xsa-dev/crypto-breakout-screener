@@ -77,6 +77,7 @@ class PendingBreakoutCandidate:
     candidate_bar: Bar
     feature_snapshot: dict[str, float | int | str | bool]
     confirmed_closes: int = 0
+    confirmation_index: int | None = None
 
 
 @dataclass(frozen=True)
@@ -563,7 +564,9 @@ class BacktestEngine:
         lifecycle_state_audit: list[dict[str, object]],
     ) -> tuple[BacktestTrade | None, PendingBreakoutCandidate | None]:
         filters = self.config.confirmation_filters
-        def skip_pending(blocker: str) -> tuple[BacktestTrade | None, PendingBreakoutCandidate | None]:
+        def skip_pending(
+            blocker: str, *, confirmation_reached: bool = False, retest_reached: bool = False
+        ) -> tuple[BacktestTrade | None, PendingBreakoutCandidate | None]:
             gate_state.skip_counts[blocker] += 1
             lifecycle_state_audit.append(
                 _candidate_lifecycle_row(
@@ -573,15 +576,33 @@ class BacktestEngine:
                     feature_snapshot=candidate.feature_snapshot,
                     blocker=blocker,
                     accepted=False,
-                    confirmation_reached=False,
+                    confirmation_reached=confirmation_reached,
+                    retest_reached=retest_reached,
                 )
             )
             return None, None
 
+        if candidate.confirmation_index is not None:
+            return self._evaluate_pending_retest(
+                candidate,
+                current=current,
+                next_bar=next_bar,
+                all_bars=all_bars,
+                index=index,
+                config_hash=config_hash,
+                gate_state=gate_state,
+                lifecycle_state_audit=lifecycle_state_audit,
+            )
+
         if filters.cancel_on_return_inside_range and current["low"] <= candidate.pre_breakout_range_high:
             return skip_pending("skipped_confirmation_returned_inside_range")
         if current["close"] <= candidate.breakout_level:
-            return skip_pending("skipped_confirmation_close_not_above_breakout")
+            blocker = (
+                "portfolio_selection_confirmation_missing"
+                if filters.require_retest
+                else "skipped_confirmation_close_not_above_breakout"
+            )
+            return skip_pending(blocker)
         heikin_ashi_snapshot = _heikin_ashi_feature_snapshot(all_bars[: index + 1])
         if filters.require_heikin_ashi_bullish and heikin_ashi_snapshot.get("feature_ha_color") != "bullish":
             return skip_pending("skipped_confirmation_heikin_ashi_not_bullish")
@@ -613,6 +634,9 @@ class BacktestEngine:
         candidate.confirmed_closes += 1
         if candidate.confirmed_closes < filters.required_closes_above_breakout:
             return None, candidate
+        if filters.require_retest:
+            candidate.confirmation_index = index
+            return None, candidate
         feature_snapshot = dict(candidate.feature_snapshot)
         feature_snapshot.update(heikin_ashi_snapshot)
         feature_snapshot.update(
@@ -643,6 +667,93 @@ class BacktestEngine:
                 accepted=True,
                 trade=trade,
                 confirmation_reached=True,
+            )
+        )
+        return trade, None
+
+    def _evaluate_pending_retest(
+        self,
+        candidate: PendingBreakoutCandidate,
+        *,
+        current: Bar,
+        next_bar: Bar,
+        all_bars: Sequence[Bar],
+        index: int,
+        config_hash: str,
+        gate_state: ResearchGateState,
+        lifecycle_state_audit: list[dict[str, object]],
+    ) -> tuple[BacktestTrade | None, PendingBreakoutCandidate | None]:
+        filters = self.config.confirmation_filters
+        confirmation_index = candidate.confirmation_index or candidate.candidate_index
+        bars_after_confirmation = index - confirmation_index
+
+        def skip_retest(blocker: str, *, retest_reached: bool) -> tuple[BacktestTrade | None, PendingBreakoutCandidate | None]:
+            gate_state.skip_counts[blocker] += 1
+            lifecycle_state_audit.append(
+                _candidate_lifecycle_row(
+                    current=candidate.candidate_bar,
+                    index=candidate.candidate_index,
+                    score=candidate.score.total,
+                    feature_snapshot=candidate.feature_snapshot,
+                    blocker=blocker,
+                    accepted=False,
+                    confirmation_reached=True,
+                    retest_reached=retest_reached,
+                )
+            )
+            return None, None
+
+        atr = candidate.feature_snapshot.get("feature_atr")
+        if not isinstance(atr, int | float) or atr <= 0:
+            tolerance = 0.0
+        else:
+            tolerance = float(atr) * filters.retest_tolerance_atr
+        retest_zone_touched = current["low"] <= candidate.breakout_level + tolerance
+        if bars_after_confirmation > filters.retest_window_bars:
+            return skip_retest("portfolio_selection_retest_missing", retest_reached=False)
+        if not retest_zone_touched:
+            return None, candidate
+        structure_holds = current["low"] >= candidate.breakout_level - tolerance
+        continuation = current["close"] > candidate.breakout_level and current["close"] > current["open"]
+        if not structure_holds or not continuation:
+            return skip_retest("portfolio_selection_retest_failed", retest_reached=True)
+
+        heikin_ashi_snapshot = _heikin_ashi_feature_snapshot(all_bars[: index + 1])
+        feature_snapshot = dict(candidate.feature_snapshot)
+        feature_snapshot.update(heikin_ashi_snapshot)
+        feature_snapshot.update(
+            {
+                "feature_confirmation_candidate_index": candidate.candidate_index,
+                "feature_confirmation_entry_delay_bars": index - candidate.candidate_index,
+                "feature_confirmation_closes": candidate.confirmed_closes,
+                "feature_retest_confirmation_index": confirmation_index,
+                "feature_retest_entry_delay_bars": index - confirmation_index,
+                "feature_retest_tolerance": tolerance,
+                "feature_retest_window_bars": filters.retest_window_bars,
+            }
+        )
+        trade = self._close_profile_trade(
+            score=candidate.score,
+            quantity=candidate.quantity,
+            current=current,
+            next_bar=next_bar,
+            future_bars=all_bars[index + 1 : index + self.config.exit_profile.fixed_holding_bars + 1],
+            index=index,
+            config_hash=config_hash,
+            level_price=candidate.breakout_level,
+            feature_snapshot=feature_snapshot,
+        )
+        lifecycle_state_audit.append(
+            _candidate_lifecycle_row(
+                current=candidate.candidate_bar,
+                index=candidate.candidate_index,
+                score=candidate.score.total,
+                feature_snapshot=feature_snapshot,
+                blocker=None,
+                accepted=True,
+                trade=trade,
+                confirmation_reached=True,
+                retest_reached=True,
             )
         )
         return trade, None
@@ -1330,6 +1441,7 @@ def _candidate_lifecycle_row(
     blocker: str | None,
     accepted: bool,
     confirmation_reached: bool,
+    retest_reached: bool = False,
     trade: BacktestTrade | None = None,
 ) -> dict[str, object]:
     """Build deterministic lifecycle audit row from candidate-time evidence only."""
@@ -1344,7 +1456,7 @@ def _candidate_lifecycle_row(
         "approach": approach,
         "breakout": True,
         "confirmation": confirmation_reached,
-        "retest": False,
+        "retest": retest_reached,
         "continuation": continuation,
         "failure_exit": failure_exit,
     }

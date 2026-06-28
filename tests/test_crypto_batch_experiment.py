@@ -333,6 +333,44 @@ def test_batch_runner_records_confirmation_filter_profile(tmp_path) -> None:
     assert summary["confirmation_filter_settings"] == row.confirmation_filter_settings
 
 
+def test_batch_runner_records_retest_confirmation_profile(tmp_path) -> None:
+    windows = [
+        BatchWindow(
+            label="retest",
+            start=datetime(2024, 1, 1, tzinfo=UTC),
+            end=datetime(2024, 1, 2, tzinfo=UTC),
+        )
+    ]
+    seen_confirmation: list[dict[str, Any]] = []
+
+    def run_single(**kwargs: Any) -> CryptoExperimentResult:
+        seen_confirmation.append(kwargs["confirmation_filters"].model_dump(mode="json"))
+        return _fake_run_factory(tmp_path)(**kwargs)
+
+    profile = "conservative-v1-m15-slope-positive-max-trades-8-confirm-close-1-retest-3"
+    result = run_batch_experiment(
+        windows=windows,
+        output_dir=tmp_path / "backtests",
+        market_data_dir=tmp_path / "market-data",
+        gate_profile=profile,
+        download=_fake_download_factory(tmp_path),
+        run_single=run_single,
+    )
+
+    row = result.summary.windows[0]
+    assert result.summary.confirmation_filter_profile == profile
+    assert row.confirmation_filter_settings == {
+        "cancel_on_return_inside_range": False,
+        "min_close_position": None,
+        "required_closes_above_breakout": 1,
+        "require_retest": True,
+        "retest_window_bars": 3,
+        "retest_tolerance_atr": 0.25,
+    }
+    assert seen_confirmation[0]["require_retest"] is True
+    assert seen_confirmation[0]["retest_window_bars"] == 3
+
+
 def test_batch_runner_records_heikin_ashi_named_profiles(tmp_path) -> None:
     windows = [
         BatchWindow(

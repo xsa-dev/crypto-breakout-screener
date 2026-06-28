@@ -355,6 +355,7 @@ def research_gate_profile(name: str) -> BacktestResearchGateConfig:
         "conservative-v1-m15-slope-positive-max-trades-8-confirm-close-2",
         "conservative-v1-m15-slope-positive-max-trades-8-confirm-close-1-closepos70",
         "conservative-v1-m15-slope-positive-max-trades-8-confirm-close-1-no-return-inside-range",
+        "conservative-v1-m15-slope-positive-max-trades-8-confirm-close-1-retest-3",
         "conservative-v1-m15-slope-positive-loss-cooldown-12",
         *EXIT_PROFILE_NAMES,
     }:
@@ -434,6 +435,7 @@ def feature_filter_profile(name: str) -> BacktestFeatureFilterConfig:
         "conservative-v1-m15-slope-positive-max-trades-8-confirm-close-2",
         "conservative-v1-m15-slope-positive-max-trades-8-confirm-close-1-closepos70",
         "conservative-v1-m15-slope-positive-max-trades-8-confirm-close-1-no-return-inside-range",
+        "conservative-v1-m15-slope-positive-max-trades-8-confirm-close-1-retest-3",
         "conservative-v1-m15-slope-positive-loss-cooldown-12",
         *EXIT_PROFILE_NAMES,
     }:
@@ -474,6 +476,7 @@ def _feature_filter_profile_name(gate_profile: str, explicit: str | None = None)
         "conservative-v1-m15-slope-positive-max-trades-8-confirm-close-2",
         "conservative-v1-m15-slope-positive-max-trades-8-confirm-close-1-closepos70",
         "conservative-v1-m15-slope-positive-max-trades-8-confirm-close-1-no-return-inside-range",
+        "conservative-v1-m15-slope-positive-max-trades-8-confirm-close-1-retest-3",
         "conservative-v1-m15-slope-positive-loss-cooldown-12",
         *EXIT_PROFILE_NAMES,
     }:
@@ -527,6 +530,10 @@ def _confirmation_filter_settings(config: BacktestConfirmationFilterConfig) -> d
         "min_close_position": config.min_close_position,
         "required_closes_above_breakout": config.required_closes_above_breakout,
     }
+    if config.require_retest:
+        settings["require_retest"] = True
+        settings["retest_window_bars"] = config.retest_window_bars
+        settings["retest_tolerance_atr"] = config.retest_tolerance_atr
     if config.require_heikin_ashi_bullish:
         settings["require_heikin_ashi_bullish"] = True
     if config.min_heikin_ashi_body_ratio is not None:
@@ -565,6 +572,13 @@ def confirmation_filter_profile(name: str) -> BacktestConfirmationFilterConfig:
             required_closes_above_breakout=1,
             cancel_on_return_inside_range=True,
         )
+    if name == "conservative-v1-m15-slope-positive-max-trades-8-confirm-close-1-retest-3":
+        return BacktestConfirmationFilterConfig(
+            required_closes_above_breakout=1,
+            require_retest=True,
+            retest_window_bars=3,
+            retest_tolerance_atr=0.25,
+        )
     return BacktestConfirmationFilterConfig()
 
 
@@ -575,6 +589,7 @@ def _confirmation_filter_profile_name(gate_profile: str) -> str:
         "conservative-v1-m15-slope-positive-max-trades-8-confirm-close-2",
         "conservative-v1-m15-slope-positive-max-trades-8-confirm-close-1-closepos70",
         "conservative-v1-m15-slope-positive-max-trades-8-confirm-close-1-no-return-inside-range",
+        "conservative-v1-m15-slope-positive-max-trades-8-confirm-close-1-retest-3",
     }:
         return gate_profile
     return "none"
@@ -1491,7 +1506,12 @@ def _confirmation_filter_skip_counts(path: Path) -> dict[str, int]:
     return {
         str(key): int(value)
         for key, value in raw_counts.items()
-        if str(key).startswith("skipped_confirmation_") and isinstance(value, int | float)
+        if (
+            str(key).startswith("skipped_confirmation_")
+            or str(key).startswith("portfolio_selection_confirmation_")
+            or str(key).startswith("portfolio_selection_retest_")
+        )
+        and isinstance(value, int | float)
     }
 
 
@@ -2337,6 +2357,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "conservative-v1-m15-slope-positive-max-trades-8-confirm-close-2",
             "conservative-v1-m15-slope-positive-max-trades-8-confirm-close-1-closepos70",
             "conservative-v1-m15-slope-positive-max-trades-8-confirm-close-1-no-return-inside-range",
+            "conservative-v1-m15-slope-positive-max-trades-8-confirm-close-1-retest-3",
             "conservative-v1-m15-slope-positive-loss-cooldown-12",
             *sorted(EXIT_PROFILE_NAMES),
         ],

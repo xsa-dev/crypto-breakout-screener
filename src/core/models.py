@@ -503,6 +503,9 @@ class BacktestConfirmationFilterConfig(BaseModel):
     required_closes_above_breakout: int = Field(default=0, ge=0, le=2)
     min_close_position: float | None = Field(default=None, ge=0, le=1)
     cancel_on_return_inside_range: bool = False
+    require_retest: bool = False
+    retest_window_bars: int = Field(default=0, ge=0, le=8)
+    retest_tolerance_atr: float = Field(default=0.25, ge=0)
     require_heikin_ashi_bullish: bool | None = None
     min_heikin_ashi_body_ratio: float | None = Field(default=None, ge=0, le=1)
     max_heikin_ashi_upper_wick_ratio: float | None = Field(default=None, ge=0, le=1)
@@ -514,6 +517,7 @@ class BacktestConfirmationFilterConfig(BaseModel):
             self.required_closes_above_breakout > 0
             or self.min_close_position is not None
             or self.cancel_on_return_inside_range
+            or self.require_retest
             or self.require_heikin_ashi_bullish
             or self.min_heikin_ashi_body_ratio is not None
             or self.max_heikin_ashi_upper_wick_ratio is not None
@@ -527,6 +531,12 @@ class BacktestConfirmationFilterConfig(BaseModel):
             raise ValueError(msg)
         if self.cancel_on_return_inside_range and self.required_closes_above_breakout < 1:
             msg = "cancel_on_return_inside_range requires at least one confirmation close"
+            raise ValueError(msg)
+        if self.require_retest and self.required_closes_above_breakout < 1:
+            msg = "require_retest requires at least one confirmation close"
+            raise ValueError(msg)
+        if self.require_retest and self.retest_window_bars < 1:
+            msg = "require_retest requires a positive retest_window_bars"
             raise ValueError(msg)
         return self
 
