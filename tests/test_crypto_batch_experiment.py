@@ -6,6 +6,7 @@ from typing import Any
 
 import pytest
 
+from src.app.breakout.algorithmic_score import calculate_algorithmic_breakout_score
 from src.app.breakout.experiments.crypto_backtest import (
     CryptoExperimentResult,
     PublicDownloadResult,
@@ -27,7 +28,9 @@ from src.app.breakout.experiments.crypto_portfolio_batch import (
 )
 
 
-def test_batch_runner_writes_deterministic_summary_and_research_verdict(tmp_path, monkeypatch) -> None:
+def test_batch_runner_writes_deterministic_summary_and_research_verdict(
+    tmp_path, monkeypatch
+) -> None:
     monkeypatch.setenv("BYBIT_API_KEY", "SHOULD_NOT_APPEAR")
     windows = [
         BatchWindow(
@@ -117,7 +120,6 @@ def test_batch_runner_records_conservative_gate_profile(tmp_path) -> None:
     assert seen_gates[0]["cooldown_bars_after_loss"] == 6
 
 
-
 def test_batch_runner_records_feature_filter_profile(tmp_path) -> None:
     windows = [
         BatchWindow(
@@ -153,9 +155,13 @@ def test_batch_runner_records_feature_filter_profile(tmp_path) -> None:
     with result.summary_csv_path.open(newline="", encoding="utf-8") as file:
         rows = list(csv.DictReader(file))
     assert rows[0]["feature_filter_profile"] == "conservative-v1-m15-slope-positive"
-    assert json.loads(rows[0]["feature_filter_settings_json"])["require_m15_ema_slope_positive"] is True
-    assert json.loads(rows[0]["feature_filter_skip_counts_json"]) == {"skipped_feature_m15_ema_slope_not_positive": 3}
-
+    assert (
+        json.loads(rows[0]["feature_filter_settings_json"])["require_m15_ema_slope_positive"]
+        is True
+    )
+    assert json.loads(rows[0]["feature_filter_skip_counts_json"]) == {
+        "skipped_feature_m15_ema_slope_not_positive": 3
+    }
 
 
 def test_batch_runner_records_drawdown_risk_control_profile(tmp_path) -> None:
@@ -185,7 +191,9 @@ def test_batch_runner_records_drawdown_risk_control_profile(tmp_path) -> None:
 
     row = result.summary.windows[0]
     assert result.summary.feature_filter_profile == "conservative-v1-m15-slope-positive"
-    assert result.summary.risk_control_profile == "conservative-v1-m15-slope-positive-daily-stop-3000"
+    assert (
+        result.summary.risk_control_profile == "conservative-v1-m15-slope-positive-daily-stop-3000"
+    )
     assert row.risk_control_profile == "conservative-v1-m15-slope-positive-daily-stop-3000"
     assert row.risk_control_settings["daily_stop_loss"] == 3000.0
     assert row.risk_control_skip_counts == {
@@ -201,8 +209,6 @@ def test_batch_runner_records_drawdown_risk_control_profile(tmp_path) -> None:
     assert rows[0]["risk_control_profile"] == "conservative-v1-m15-slope-positive-daily-stop-3000"
     assert json.loads(rows[0]["risk_control_settings_json"])["daily_stop_loss"] == 3000.0
     assert json.loads(rows[0]["risk_control_skip_counts_json"]) == row.risk_control_skip_counts
-
-
 
 
 def test_batch_runner_records_volatility_regime_filter_profile(tmp_path) -> None:
@@ -262,7 +268,6 @@ def test_batch_runner_records_volatility_regime_filter_profile(tmp_path) -> None
     assert summary["regime_filter_settings"] == row.regime_filter_settings
 
 
-
 def test_batch_runner_records_confirmation_filter_profile(tmp_path) -> None:
     windows = [
         BatchWindow(
@@ -315,8 +320,13 @@ def test_batch_runner_records_confirmation_filter_profile(tmp_path) -> None:
     with result.summary_csv_path.open(newline="", encoding="utf-8") as file:
         rows = list(csv.DictReader(file))
     assert rows[0]["confirmation_filter_profile"] == profile
-    assert json.loads(rows[0]["confirmation_filter_settings_json"]) == row.confirmation_filter_settings
-    assert json.loads(rows[0]["confirmation_filter_skip_counts_json"]) == row.confirmation_filter_skip_counts
+    assert (
+        json.loads(rows[0]["confirmation_filter_settings_json"]) == row.confirmation_filter_settings
+    )
+    assert (
+        json.loads(rows[0]["confirmation_filter_skip_counts_json"])
+        == row.confirmation_filter_skip_counts
+    )
 
     summary = json.loads(result.summary_json_path.read_text(encoding="utf-8"))
     assert summary["confirmation_filter_profile"] == profile
@@ -338,7 +348,9 @@ def test_batch_runner_records_heikin_ashi_named_profiles(tmp_path) -> None:
     def run_single(**kwargs: Any) -> CryptoExperimentResult:
         seen_feature_filters.append(kwargs["feature_filters"].model_dump(mode="json"))
         seen_confirmation_filters.append(kwargs["confirmation_filters"].model_dump(mode="json"))
-        seen_exit_profiles.append(kwargs["exit_profile"].model_dump(mode="json", exclude_defaults=True))
+        seen_exit_profiles.append(
+            kwargs["exit_profile"].model_dump(mode="json", exclude_defaults=True)
+        )
         return _fake_run_factory(tmp_path)(**kwargs)
 
     trend = run_batch_experiment(
@@ -394,7 +406,6 @@ def test_batch_runner_records_heikin_ashi_named_profiles(tmp_path) -> None:
     assert usage["density_source"] == "ohlcv_proxy_or_unavailable"
 
 
-
 def test_batch_runner_records_exit_profile(tmp_path) -> None:
     windows = [
         BatchWindow(
@@ -409,7 +420,9 @@ def test_batch_runner_records_exit_profile(tmp_path) -> None:
 
     def run_single(**kwargs: Any) -> CryptoExperimentResult:
         seen_exit_profiles.append(kwargs["exit_profile"].model_dump(mode="json", exclude_none=True))
-        seen_gate_profiles.append(kwargs["research_gates"].model_dump(mode="json", exclude_none=True))
+        seen_gate_profiles.append(
+            kwargs["research_gates"].model_dump(mode="json", exclude_none=True)
+        )
         seen_base_quantities.append(float(kwargs.get("base_quantity", 10.0)))
         return _fake_run_factory(tmp_path)(**kwargs)
 
@@ -433,7 +446,10 @@ def test_batch_runner_records_exit_profile(tmp_path) -> None:
     }
     assert seen_exit_profiles == [row.exit_profile_settings]
     assert seen_base_quantities == [10.0]
-    assert exit_profile_config(profile).model_dump(mode="json", exclude_none=True) == row.exit_profile_settings
+    assert (
+        exit_profile_config(profile).model_dump(mode="json", exclude_none=True)
+        == row.exit_profile_settings
+    )
 
     with result.summary_csv_path.open(newline="", encoding="utf-8") as file:
         rows = list(csv.DictReader(file))
@@ -463,7 +479,9 @@ def test_batch_runner_records_exit_profile(tmp_path) -> None:
         "target_atr": 2.0,
     }
 
-    trailing_profile = "conservative-v1-m15-slope-positive-max-trades-8-trail-1p0-giveback-0p5-hold-8"
+    trailing_profile = (
+        "conservative-v1-m15-slope-positive-max-trades-8-trail-1p0-giveback-0p5-hold-8"
+    )
     assert exit_profile_config(trailing_profile).model_dump(mode="json", exclude_none=True) == {
         "fixed_holding_bars": 8,
         "trailing_after_atr": 1.0,
@@ -471,7 +489,9 @@ def test_batch_runner_records_exit_profile(tmp_path) -> None:
     }
 
     extended_hold_profile = "conservative-v1-m15-slope-positive-max-trades-8-hold-32"
-    assert exit_profile_config(extended_hold_profile).model_dump(mode="json", exclude_none=True) == {
+    assert exit_profile_config(extended_hold_profile).model_dump(
+        mode="json", exclude_none=True
+    ) == {
         "fixed_holding_bars": 32,
     }
 
@@ -527,8 +547,7 @@ def test_batch_runner_records_exit_profile(tmp_path) -> None:
     assert scaled_summary["exposure_settings"] == {"base_quantity": 0.5}
 
     target_drawdown_profile = (
-        "conservative-v1-m15-slope-positive-max-trades-8-target-4p0-hold-32-"
-        "drawdown-30pct"
+        "conservative-v1-m15-slope-positive-max-trades-8-target-4p0-hold-32-drawdown-30pct"
     )
     drawdown_result = run_batch_experiment(
         windows=windows,
@@ -568,8 +587,7 @@ def test_batch_runner_records_exit_profile(tmp_path) -> None:
     }
 
     large_target_close_stop_profile = (
-        "conservative-v1-m15-slope-positive-max-trades-8-"
-        "target-4p0-close-stop-1p0-hold-32"
+        "conservative-v1-m15-slope-positive-max-trades-8-target-4p0-close-stop-1p0-hold-32"
     )
     close_stop_result = run_batch_experiment(
         windows=windows,
@@ -589,8 +607,7 @@ def test_batch_runner_records_exit_profile(tmp_path) -> None:
     assert seen_exit_profiles[-1] == close_stop_row.exit_profile_settings
 
     large_target_breakeven_profile = (
-        "conservative-v1-m15-slope-positive-max-trades-8-"
-        "target-4p0-breakeven-1p0-hold-32"
+        "conservative-v1-m15-slope-positive-max-trades-8-target-4p0-breakeven-1p0-hold-32"
     )
     breakeven_result = run_batch_experiment(
         windows=windows,
@@ -610,8 +627,7 @@ def test_batch_runner_records_exit_profile(tmp_path) -> None:
     assert breakeven_row.risk_control_profile == "conservative-v1-m15-slope-positive-max-trades-8"
 
     close_target_breakeven_profile = (
-        "conservative-v1-m15-slope-positive-max-trades-8-"
-        "close-target-2p0-breakeven-1p0-hold-32"
+        "conservative-v1-m15-slope-positive-max-trades-8-close-target-2p0-breakeven-1p0-hold-32"
     )
     assert exit_profile_config(close_target_breakeven_profile).model_dump(
         mode="json",
@@ -622,9 +638,7 @@ def test_batch_runner_records_exit_profile(tmp_path) -> None:
         "close_target_atr": 2.0,
     }
 
-    occupancy_hold_profile = (
-        "conservative-v1-m15-slope-positive-max-trades-8-occupancy-hold-8"
-    )
+    occupancy_hold_profile = "conservative-v1-m15-slope-positive-max-trades-8-occupancy-hold-8"
     assert exit_profile_config(occupancy_hold_profile).model_dump(
         mode="json", exclude_none=True
     ) == {
@@ -694,8 +708,7 @@ def test_batch_runner_records_exit_profile(tmp_path) -> None:
     assert seen_exit_profiles[-1] == occupancy_close_target_row.exit_profile_settings
 
     close_target_close_stop_profile = (
-        "conservative-v1-m15-slope-positive-max-trades-8-"
-        "close-target-2p0-close-stop-1p0-hold-32"
+        "conservative-v1-m15-slope-positive-max-trades-8-close-target-2p0-close-stop-1p0-hold-32"
     )
     assert exit_profile_config(close_target_close_stop_profile).model_dump(
         mode="json", exclude_none=True
@@ -744,7 +757,9 @@ def test_batch_runner_records_exit_profile(tmp_path) -> None:
         "partial_residual_trailing_giveback_atr": 1.0,
     }
 
-    close_stop_profile = "conservative-v1-m15-slope-positive-max-trades-8-close-stop-0p5-close-target-2p0-hold-16"
+    close_stop_profile = (
+        "conservative-v1-m15-slope-positive-max-trades-8-close-stop-0p5-close-target-2p0-hold-16"
+    )
     assert exit_profile_config(close_stop_profile).model_dump(mode="json", exclude_none=True) == {
         "fixed_holding_bars": 16,
         "close_stop_atr": 0.5,
@@ -774,8 +789,7 @@ def test_batch_runner_records_exit_profile(tmp_path) -> None:
     assert seen_exit_profiles[-1] == delayed_row.exit_profile_settings
 
     profit_lock_profile = (
-        "conservative-v1-m15-slope-positive-max-trades-8-"
-        "target-4p0-trail-2p0-giveback-1p0-hold-32"
+        "conservative-v1-m15-slope-positive-max-trades-8-target-4p0-trail-2p0-giveback-1p0-hold-32"
     )
     profit_lock_result = run_batch_experiment(
         windows=windows,
@@ -809,8 +823,7 @@ def test_batch_runner_records_exit_profile(tmp_path) -> None:
     }
 
     favorable_timeout_profile = (
-        "conservative-v1-m15-slope-positive-max-trades-8-"
-        "target-4p0-fav-timeout-1p0-after-4-hold-32"
+        "conservative-v1-m15-slope-positive-max-trades-8-target-4p0-fav-timeout-1p0-after-4-hold-32"
     )
     favorable_timeout_result = run_batch_experiment(
         windows=windows,
@@ -842,7 +855,6 @@ def test_batch_runner_records_exit_profile(tmp_path) -> None:
         "favorable_timeout_atr": 1.0,
         "favorable_timeout_bars": 4,
     }
-
 
 
 def test_batch_runner_passes_and_records_cost_model_settings(tmp_path) -> None:
@@ -914,7 +926,9 @@ def test_batch_runner_can_reuse_cached_market_data(tmp_path) -> None:
     ]
     label = "20240101T000000Z_20240102T000000Z"
     for timeframe in ("M15", "H1", "H4", "D1"):
-        path = tmp_path / "market-data" / "bybit" / "linear" / "BTCUSDT" / timeframe / f"{label}.csv"
+        path = (
+            tmp_path / "market-data" / "bybit" / "linear" / "BTCUSDT" / timeframe / f"{label}.csv"
+        )
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("timestamp,open,high,low,close,volume,source\n", encoding="utf-8")
 
@@ -934,7 +948,6 @@ def test_batch_runner_can_reuse_cached_market_data(tmp_path) -> None:
     row = result.summary.windows[0]
     assert row.status == "passed"
     assert row.downloaded_csv_paths["M15"].endswith(f"M15/{label}.csv")
-
 
 
 def test_batch_runner_writes_bad_regime_diagnostics_for_failed_windows(tmp_path) -> None:
@@ -990,7 +1003,10 @@ def test_batch_runner_writes_bad_regime_diagnostics_for_failed_windows(tmp_path)
     with paths["bad_regime_bucket_summary"].open(newline="", encoding="utf-8") as file:
         bucket_rows = list(csv.DictReader(file))
     assert {row["window_label"] for row in bucket_rows} == {"fail"}
-    assert {row["bucket_source"] for row in bucket_rows} == {"feature_bucket_pnl", "regime_bucket_summary"}
+    assert {row["bucket_source"] for row in bucket_rows} == {
+        "feature_bucket_pnl",
+        "regime_bucket_summary",
+    }
     assert {row["no_lookahead_source"] for row in bucket_rows} == {"entry_feature_snapshot"}
 
     summary = json.loads(result.summary_json_path.read_text(encoding="utf-8"))
@@ -1023,7 +1039,10 @@ def test_batch_verdict_blocks_failed_thresholds(tmp_path) -> None:
     assert result.summary.aggregate.technical_pass is True
     assert result.summary.aggregate.hypothesis_supported is False
     assert result.summary.aggregate.hypothesis_not_supported is True
-    assert any("loss:net_profit_below_threshold" in blocker for blocker in result.summary.aggregate.blockers)
+    assert any(
+        "loss:net_profit_below_threshold" in blocker
+        for blocker in result.summary.aggregate.blockers
+    )
 
 
 def test_batch_runner_records_failed_window_without_passing_batch(tmp_path) -> None:
@@ -1278,7 +1297,12 @@ def test_portfolio_batch_includes_economically_failed_symbol_trades(tmp_path) ->
 
     with Path(window.trade_csv_path or "").open(newline="", encoding="utf-8") as file:
         trade_rows = list(csv.DictReader(file))
-    assert sorted(row["symbol"] for row in trade_rows) == ["ETHUSDT", "ETHUSDT", "SOLUSDT", "SOLUSDT"]
+    assert sorted(row["symbol"] for row in trade_rows) == [
+        "ETHUSDT",
+        "ETHUSDT",
+        "SOLUSDT",
+        "SOLUSDT",
+    ]
     assert sorted(row["accepted"] for row in trade_rows) == ["False", "False", "True", "True"]
 
 
@@ -1325,7 +1349,109 @@ def test_portfolio_cost_feasible_selection_skips_high_friction_entries(tmp_path)
     }
 
 
-def test_portfolio_quarter_diagnostics_serialize_mixed_statuses_and_unavailable_fields(tmp_path) -> None:
+def test_algorithmic_breakout_score_components_buckets_and_leakage_guard() -> None:
+    strong = calculate_algorithmic_breakout_score(
+        {
+            "entry_price": 100.0,
+            "spread": 1.0,
+            "slippage_per_unit": 0.5,
+            "feature_context_H1_trend_alignment": "long",
+            "feature_context_H4_trend_alignment": "long",
+            "feature_context_D1_trend_alignment": "long",
+            "feature_fixed_universe_positive_symbol_ratio": 1.0,
+            "feature_relative_strength_vs_btcusdt": 1.0,
+            "feature_relative_strength_vs_ethusdt": 1.0,
+            "feature_recent_range_compression": 1.0,
+            "feature_volume_ratio": 1.6,
+            "feature_breakout_distance_atr": 0.5,
+            "feature_ema_slope_atr": 0.1,
+        }
+    )
+    reduced = calculate_algorithmic_breakout_score(
+        {
+            "entry_price": 100.0,
+            "spread": 1.0,
+            "slippage_per_unit": 0.5,
+            "feature_context_H1_trend_alignment": "long",
+            "feature_context_H4_trend_alignment": "short_or_flat",
+            "feature_fixed_universe_positive_symbol_ratio": 0.73,
+            "feature_relative_strength_vs_btcusdt": 1.0,
+            "feature_relative_strength_vs_ethusdt": -1.0,
+            "feature_recent_range_compression": 1.8,
+            "feature_volume_ratio": 1.2,
+            "feature_breakout_distance_atr": 0.5,
+            "feature_ema_slope_atr": -0.1,
+        }
+    )
+    weak = calculate_algorithmic_breakout_score({"entry_price": 100.0, "spread": 5.0})
+
+    assert sum(strong.component_scores.values()) == strong.total_score
+    assert strong.total_score == 100
+    assert strong.eligibility_bucket == "normal_priority"
+    assert reduced.total_score == 70
+    assert reduced.eligibility_bucket == "reduced_priority"
+    assert weak.total_score < 70
+    assert weak.eligibility_bucket == "blocked"
+    assert weak.rejection_reasons == ["portfolio_selection_algorithmic_score_below_threshold"]
+    with pytest.raises(ValueError, match="forbids outcome/future inputs"):
+        calculate_algorithmic_breakout_score({"entry_price": 100.0, "net_pnl": 10.0})
+
+
+def test_portfolio_algorithmic_score_selection_blocks_weak_candidates(tmp_path) -> None:
+    windows = [
+        BatchWindow(
+            label="portfolio",
+            start=datetime(2024, 1, 1, tzinfo=UTC),
+            end=datetime(2024, 1, 2, tzinfo=UTC),
+        )
+    ]
+    result = run_portfolio_batch_experiment(
+        windows=windows,
+        universe="ethusdt-only",
+        symbols=("ETHUSDT", "DOGEUSDT"),
+        output_dir=tmp_path / "portfolio",
+        market_data_dir=tmp_path / "market-data",
+        gate_profile="conservative-v1-m15-slope-positive-max-trades-8-target-4p0-hold-32",
+        selection_profile="algorithmic-breakout-score-v1",
+        max_total_open_notional=2_000.0,
+        run_symbol_batch=_fake_symbol_batch_factory(
+            tmp_path,
+            symbol_algorithmic_features={
+                "DOGEUSDT": {
+                    "feature_fixed_universe_positive_symbol_ratio": "0.0",
+                    "feature_relative_strength_vs_btcusdt": "-1.0",
+                    "feature_relative_strength_vs_ethusdt": "-1.0",
+                    "feature_recent_range_compression": "4.0",
+                    "feature_volume_ratio": "0.5",
+                    "feature_breakout_distance_atr": "3.0",
+                    "feature_ema_slope_atr": "-0.1",
+                }
+            },
+            symbol_entry_prices={"DOGEUSDT": 0.1},
+        ),
+    )
+
+    window = result.summary.windows[0]
+    assert result.summary.selection_profile == "algorithmic-breakout-score-v1"
+    assert result.summary.selection_settings["min_total_score"] == 70
+    assert window.selection_skip_counts == {
+        "portfolio_selection_algorithmic_score_below_threshold": 1
+    }
+    assert "normal_priority" in window.selection_score_distribution
+    assert result.summary.selection_score_distribution["blocked"] == 1
+
+    with Path(window.trade_csv_path or "").open(newline="", encoding="utf-8") as file:
+        trade_rows = list(csv.DictReader(file))
+    blocked = next(row for row in trade_rows if row["symbol"] == "DOGEUSDT")
+    assert blocked["accepted"] == "False"
+    assert blocked["blocker"] == "portfolio_selection_algorithmic_score_below_threshold"
+    assert blocked["algorithmic_score_bucket"] == "blocked"
+    assert "cost_feasibility" in blocked["algorithmic_score_components"]
+
+
+def test_portfolio_quarter_diagnostics_serialize_mixed_statuses_and_unavailable_fields(
+    tmp_path,
+) -> None:
     windows = [
         PortfolioWindowSummary(
             window_label="2023q1",
@@ -1556,11 +1682,22 @@ def _fake_symbol_batch_factory(
     d1_trend: str = "long",
     symbol_net_profits: dict[str, float] | None = None,
     symbol_entry_prices: dict[str, float] | None = None,
+    symbol_algorithmic_features: dict[str, dict[str, str]] | None = None,
 ):
     def run_symbol_batch(**kwargs: Any):
         symbol = kwargs["symbol"]
         net_profit = (symbol_net_profits or {}).get(symbol, 100.0)
         entry_price = (symbol_entry_prices or {}).get(symbol, 100.0)
+        feature_values = {
+            "feature_fixed_universe_positive_symbol_ratio": "0.80",
+            "feature_relative_strength_vs_btcusdt": "1.0",
+            "feature_relative_strength_vs_ethusdt": "1.0",
+            "feature_recent_range_compression": "1.0",
+            "feature_volume_ratio": "1.6",
+            "feature_breakout_distance_atr": "0.5",
+            "feature_ema_slope_atr": "0.1",
+            **(symbol_algorithmic_features or {}).get(symbol, {}),
+        }
         profit_factor = 2.0 if net_profit > 0 else 2.0 / 3.0
 
         def run_single(**single_kwargs: Any) -> CryptoExperimentResult:
@@ -1594,8 +1731,15 @@ def _fake_symbol_batch_factory(
                 encoding="utf-8",
             )
             entry_features_path.write_text(
-                "trade_id,symbol,entry_time,net_pnl,feature_context_H1_trend_alignment,feature_context_H4_trend_alignment,feature_context_D1_trend_alignment\n"
-                f"{run_id}-1,{symbol},2024-01-01T00:00:00+00:00,{net_profit},{h1_trend},{h4_trend},{d1_trend}\n",
+                "trade_id,symbol,entry_time,net_pnl,feature_context_H1_trend_alignment,feature_context_H4_trend_alignment,feature_context_D1_trend_alignment,feature_fixed_universe_positive_symbol_ratio,feature_relative_strength_vs_btcusdt,feature_relative_strength_vs_ethusdt,feature_recent_range_compression,feature_volume_ratio,feature_breakout_distance_atr,feature_ema_slope_atr\n"
+                f"{run_id}-1,{symbol},2024-01-01T00:00:00+00:00,{net_profit},{h1_trend},{h4_trend},{d1_trend},"
+                f"{feature_values['feature_fixed_universe_positive_symbol_ratio']},"
+                f"{feature_values['feature_relative_strength_vs_btcusdt']},"
+                f"{feature_values['feature_relative_strength_vs_ethusdt']},"
+                f"{feature_values['feature_recent_range_compression']},"
+                f"{feature_values['feature_volume_ratio']},"
+                f"{feature_values['feature_breakout_distance_atr']},"
+                f"{feature_values['feature_ema_slope_atr']}\n",
                 encoding="utf-8",
             )
             lifecycle_path.write_text(
@@ -1605,7 +1749,9 @@ def _fake_symbol_batch_factory(
                 encoding="utf-8",
             )
             parameters_path.write_text(
-                json.dumps({"research_gate_skip_counts": {}, "exit_profile_counts": {}}, sort_keys=True),
+                json.dumps(
+                    {"research_gate_skip_counts": {}, "exit_profile_counts": {}}, sort_keys=True
+                ),
                 encoding="utf-8",
             )
             manifest_path.write_text(
@@ -1705,9 +1851,7 @@ def _fake_run_factory(
             encoding="utf-8",
         )
         drawdown_path.write_text(
-            "timestamp,drawdown\n"
-            "2024-01-01T00:00:00+00:00,0\n"
-            "2024-01-02T00:00:00+00:00,-0.42\n",
+            "timestamp,drawdown\n2024-01-01T00:00:00+00:00,0\n2024-01-02T00:00:00+00:00,-0.42\n",
             encoding="utf-8",
         )
         artifact_paths = [
@@ -1828,8 +1972,12 @@ def test_batch_runner_writes_forward_path_diagnostic_summaries(tmp_path) -> None
     assert set(paths) == {"forward_path_window_summary", "passed_vs_failed_forward_path_summary"}
     assert Path(paths["forward_path_window_summary"]).exists()
     assert Path(paths["passed_vs_failed_forward_path_summary"]).exists()
-    assert all("forward_path_diagnostics" in row.feature_artifact_paths for row in result.summary.windows)
-    assert all("holding_horizon_pnl" in row.feature_artifact_paths for row in result.summary.windows)
+    assert all(
+        "forward_path_diagnostics" in row.feature_artifact_paths for row in result.summary.windows
+    )
+    assert all(
+        "holding_horizon_pnl" in row.feature_artifact_paths for row in result.summary.windows
+    )
 
     with Path(paths["forward_path_window_summary"]).open(newline="", encoding="utf-8") as file:
         rows = list(csv.DictReader(file))
@@ -1837,7 +1985,9 @@ def test_batch_runner_writes_forward_path_diagnostic_summaries(tmp_path) -> None
     assert rows[0]["horizon_bars"] == "1"
     assert rows[0]["synthetic_net_pnl"] == "42.0"
 
-    with Path(paths["passed_vs_failed_forward_path_summary"]).open(newline="", encoding="utf-8") as file:
+    with Path(paths["passed_vs_failed_forward_path_summary"]).open(
+        newline="", encoding="utf-8"
+    ) as file:
         grouped = list(csv.DictReader(file))
     assert grouped
     assert grouped[0]["window_group"] == "passed"
@@ -1877,8 +2027,13 @@ def test_batch_runner_writes_path_risk_diagnostic_summaries(tmp_path) -> None:
     assert set(paths) == {"path_risk_window_summary", "passed_vs_failed_path_risk_summary"}
     assert Path(paths["path_risk_window_summary"]).exists()
     assert Path(paths["passed_vs_failed_path_risk_summary"]).exists()
-    assert all("path_risk_diagnostics" in row.feature_artifact_paths for row in result.summary.windows)
-    assert all("path_risk_threshold_summary" in row.feature_artifact_paths for row in result.summary.windows)
+    assert all(
+        "path_risk_diagnostics" in row.feature_artifact_paths for row in result.summary.windows
+    )
+    assert all(
+        "path_risk_threshold_summary" in row.feature_artifact_paths
+        for row in result.summary.windows
+    )
 
     with Path(paths["path_risk_window_summary"]).open(newline="", encoding="utf-8") as file:
         rows = list(csv.DictReader(file))
@@ -1886,7 +2041,9 @@ def test_batch_runner_writes_path_risk_diagnostic_summaries(tmp_path) -> None:
     assert rows[0]["horizon_bars"] == "1"
     assert rows[0]["average_max_favorable_atr"] == "1.1"
 
-    with Path(paths["passed_vs_failed_path_risk_summary"]).open(newline="", encoding="utf-8") as file:
+    with Path(paths["passed_vs_failed_path_risk_summary"]).open(
+        newline="", encoding="utf-8"
+    ) as file:
         grouped = list(csv.DictReader(file))
     assert grouped
     assert grouped[0]["window_group"] == "passed"

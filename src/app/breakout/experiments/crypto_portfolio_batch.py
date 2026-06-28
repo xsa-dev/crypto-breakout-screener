@@ -14,6 +14,11 @@ from typing import Any, Literal, cast
 
 from pydantic import BaseModel, Field
 
+from src.app.breakout.algorithmic_score import (
+    AlgorithmicEligibilityBucket,
+    calculate_algorithmic_breakout_score,
+    score_input_from_feature_row,
+)
 from src.app.breakout.experiments.crypto_batch import (
     BatchExperimentResult,
     BatchWindow,
@@ -56,6 +61,11 @@ class PortfolioTrade(BaseModel):
     blocker: str | None = None
     regime_label: Literal["bull_long", "bear_short_or_avoid", "neutral_blocked"] = "neutral_blocked"
     regime_decision: Literal["long_enabled", "risk_off_blocked"] = "risk_off_blocked"
+    algorithmic_score_total: int | None = None
+    algorithmic_score_components: dict[str, int] = Field(default_factory=dict)
+    algorithmic_score_bucket: AlgorithmicEligibilityBucket | None = None
+    algorithmic_score_rejection_reasons: list[str] = Field(default_factory=list)
+    algorithmic_score_unavailable_components: list[str] = Field(default_factory=list)
     furthest_lifecycle_state: str = "unavailable"
     lifecycle_state_counts: dict[str, int] = Field(default_factory=dict)
     source_trade_id: str | None = None
@@ -90,6 +100,7 @@ class PortfolioWindowSummary(BaseModel):
     accepted_trade_count: int = 0
     skipped_exposure_trade_count: int = 0
     selection_skip_counts: dict[str, int] = Field(default_factory=dict)
+    selection_score_distribution: dict[str, int] = Field(default_factory=dict)
     lifecycle_state_counts: dict[str, int] = Field(default_factory=dict)
     net_profit: float = 0.0
     max_drawdown: float | None = None
@@ -147,6 +158,7 @@ class PortfolioExperimentSummary(BaseModel):
     gate_profile: str
     selection_profile: str = "none"
     selection_settings: dict[str, Any] = Field(default_factory=dict)
+    selection_score_distribution: dict[str, int] = Field(default_factory=dict)
     cost_model_settings: dict[str, float]
     windows: list[PortfolioWindowSummary]
     aggregate: PortfolioAggregate
@@ -231,6 +243,7 @@ def run_portfolio_batch_experiment(
 
     symbol_results: dict[str, BatchExperimentResult] = {}
     symbol_failures: dict[str, str] = {}
+
     def evaluate_symbol(symbol: str) -> tuple[str, BatchExperimentResult]:
         return symbol, run_symbol_batch(
             windows=windows,
@@ -258,7 +271,9 @@ def run_portfolio_batch_experiment(
                     break
     else:
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = {executor.submit(evaluate_symbol, symbol): symbol for symbol in active_symbols}
+            futures = {
+                executor.submit(evaluate_symbol, symbol): symbol for symbol in active_symbols
+            }
             for future in as_completed(futures):
                 symbol = futures[future]
                 try:
@@ -279,7 +294,12 @@ def run_portfolio_batch_experiment(
             symbol_results=symbol_results,
             symbol_failures=symbol_failures,
         )
-        trades = _window_trades(window_contributions, window=window)
+        trades = _window_trades(
+            window_contributions,
+            window=window,
+            spread=spread,
+            slippage=slippage,
+        )
         window_summary, window_regimes = _portfolio_window_summary(
             window=window,
             contributions=window_contributions,
@@ -326,6 +346,7 @@ def run_portfolio_batch_experiment(
         gate_profile=gate_profile,
         selection_profile=selection_profile,
         selection_settings=active_selection_settings,
+        selection_score_distribution=_aggregate_score_distribution(portfolio_windows),
         cost_model_settings=cost_model_settings,
         windows=portfolio_windows,
         aggregate=aggregate,
@@ -381,7 +402,9 @@ def _window_contributions(
                 )
             )
             continue
-        row = next((item for item in result.summary.windows if item.window_label == window.label), None)
+        row = next(
+            (item for item in result.summary.windows if item.window_label == window.label), None
+        )
         if row is None:
             output.append(
                 PortfolioSymbolContribution(
@@ -393,7 +416,9 @@ def _window_contributions(
                 )
             )
             continue
-        output.append(_contribution_from_row(symbol=symbol, row=row, summary_path=result.summary_json_path))
+        output.append(
+            _contribution_from_row(symbol=symbol, row=row, summary_path=result.summary_json_path)
+        )
     return output
 
 
@@ -414,18 +439,30 @@ def _contribution_from_row(
 
 
 def _window_trades(
-    contributions: list[PortfolioSymbolContribution], *, window: BatchWindow
+    contributions: list[PortfolioSymbolContribution],
+    *,
+    window: BatchWindow,
+    spread: float,
+    slippage: float,
 ) -> list[PortfolioTrade]:
     trades: list[PortfolioTrade] = []
     for contribution in contributions:
         if _contribution_blocks_portfolio(contribution):
             continue
-        trades.extend(_read_trade_rows(contribution, window=window))
-    return sorted(trades, key=lambda item: (item.entry_time, item.symbol, item.source_trade_id or ""))
+        trades.extend(
+            _read_trade_rows(contribution, window=window, spread=spread, slippage=slippage)
+        )
+    return sorted(
+        trades, key=lambda item: (item.entry_time, item.symbol, item.source_trade_id or "")
+    )
 
 
 def _read_trade_rows(
-    contribution: PortfolioSymbolContribution, *, window: BatchWindow
+    contribution: PortfolioSymbolContribution,
+    *,
+    window: BatchWindow,
+    spread: float,
+    slippage: float,
 ) -> list[PortfolioTrade]:
     if contribution.artifact_dir is None:
         return []
@@ -457,12 +494,23 @@ def _read_trade_rows(
     for trade_path in trade_paths:
         with trade_path.open(newline="", encoding="utf-8") as file:
             for row in csv.DictReader(file):
-                entry_time = to_utc(datetime.fromisoformat(str(row["entry_time"]).replace("Z", "+00:00")))
-                exit_time = to_utc(datetime.fromisoformat(str(row["exit_time"]).replace("Z", "+00:00")))
+                entry_time = to_utc(
+                    datetime.fromisoformat(str(row["entry_time"]).replace("Z", "+00:00"))
+                )
+                exit_time = to_utc(
+                    datetime.fromisoformat(str(row["exit_time"]).replace("Z", "+00:00"))
+                )
                 quantity = _float(row.get("quantity"))
                 entry_price = _float(row.get("entry_price"))
                 trade_id = str(row.get("trade_id") or "")
-                regime_label, regime_decision = _classify_trade_regime(feature_rows.get(trade_id, {}))
+                feature_row = feature_rows.get(trade_id, {})
+                regime_label, regime_decision = _classify_trade_regime(feature_row)
+                algorithmic_score = _algorithmic_score_from_feature_row(
+                    feature_row,
+                    entry_price=entry_price,
+                    spread=spread,
+                    slippage=slippage,
+                )
                 lifecycle = lifecycle_by_trade.get(trade_id, {})
                 output.append(
                     PortfolioTrade(
@@ -476,6 +524,11 @@ def _read_trade_rows(
                         notional=abs(quantity * entry_price),
                         regime_label=regime_label,
                         regime_decision=regime_decision,
+                        algorithmic_score_total=algorithmic_score.total_score,
+                        algorithmic_score_components=algorithmic_score.component_scores,
+                        algorithmic_score_bucket=algorithmic_score.eligibility_bucket,
+                        algorithmic_score_rejection_reasons=algorithmic_score.rejection_reasons,
+                        algorithmic_score_unavailable_components=algorithmic_score.unavailable_components,
                         furthest_lifecycle_state=str(
                             lifecycle.get("furthest_lifecycle_state") or "unavailable"
                         ),
@@ -502,7 +555,9 @@ def _read_trade_rows(
                 blocker=_optional_str(lifecycle.get("blocker")) or "source_candidate_skipped",
                 regime_label="neutral_blocked",
                 regime_decision="risk_off_blocked",
-                furthest_lifecycle_state=str(lifecycle.get("furthest_lifecycle_state") or "unavailable"),
+                furthest_lifecycle_state=str(
+                    lifecycle.get("furthest_lifecycle_state") or "unavailable"
+                ),
                 lifecycle_state_counts=_lifecycle_state_counts([lifecycle]),
                 source_candidate_id=_optional_str(lifecycle.get("candidate_id")),
                 source_artifact_dir=str(artifact_dir),
@@ -583,11 +638,16 @@ def _portfolio_window_summary(
     )
     net_profit = sum(trade.net_pnl for trade in accepted if trade.accepted)
     gross_profit = sum(trade.net_pnl for trade in accepted if trade.accepted and trade.net_pnl > 0)
-    gross_loss = abs(sum(trade.net_pnl for trade in accepted if trade.accepted and trade.net_pnl < 0))
-    profit_factor = gross_profit / gross_loss if gross_loss > 0 else (None if gross_profit <= 0 else 999999.0)
+    gross_loss = abs(
+        sum(trade.net_pnl for trade in accepted if trade.accepted and trade.net_pnl < 0)
+    )
+    profit_factor = (
+        gross_profit / gross_loss if gross_loss > 0 else (None if gross_profit <= 0 else 999999.0)
+    )
     blocked_symbol_count = sum(1 for item in contributions if _contribution_blocks_portfolio(item))
     skipped_count = sum(1 for trade in accepted if not trade.accepted)
     selection_skip_counts = _selection_skip_counts(accepted)
+    selection_score_distribution = _score_distribution(accepted)
     accepted_count = sum(1 for trade in accepted if trade.accepted)
     blockers = _portfolio_window_blockers(
         trade_count=accepted_count,
@@ -621,6 +681,7 @@ def _portfolio_window_summary(
         accepted_trade_count=accepted_count,
         skipped_exposure_trade_count=skipped_count,
         selection_skip_counts=selection_skip_counts,
+        selection_score_distribution=selection_score_distribution,
         lifecycle_state_counts=_trade_lifecycle_state_counts(accepted),
         net_profit=net_profit,
         max_drawdown=max_drawdown,
@@ -642,14 +703,19 @@ def _portfolio_window_summary(
 
 
 def _apply_exposure_caps(
-    trades: list[PortfolioTrade], *, max_trade_notional: float, max_total_open_notional: float,
-    selection_profile: str = "none", selection_settings: dict[str, Any] | None = None,
-    spread: float = 1.0, slippage: float = 0.5,
+    trades: list[PortfolioTrade],
+    *,
+    max_trade_notional: float,
+    max_total_open_notional: float,
+    selection_profile: str = "none",
+    selection_settings: dict[str, Any] | None = None,
+    spread: float = 1.0,
+    slippage: float = 0.5,
 ) -> list[PortfolioTrade]:
     accepted: list[PortfolioTrade] = []
     open_trades: list[PortfolioTrade] = []
     active_selection_settings = selection_settings or {}
-    for trade in trades:
+    for trade in _selection_ordered_trades(trades, selection_profile=selection_profile):
         open_trades = [item for item in open_trades if item.exit_time > trade.entry_time]
         current_open = sum(item.notional for item in open_trades if item.accepted)
         if not trade.accepted:
@@ -681,7 +747,9 @@ def _apply_exposure_caps(
             accepted.append(rejected)
             continue
         scale = capped_notional / original_notional if original_notional > 0 else 1.0
-        adjusted = trade.model_copy(update={"notional": capped_notional, "net_pnl": trade.net_pnl * scale})
+        adjusted = trade.model_copy(
+            update={"notional": capped_notional, "net_pnl": trade.net_pnl * scale}
+        )
         accepted.append(adjusted)
         open_trades.append(adjusted)
     return accepted
@@ -692,6 +760,21 @@ def _selection_settings(selection_profile: str) -> dict[str, Any]:
         return {}
     if selection_profile == "cost-feasible-v1":
         return {"max_round_trip_friction_ratio": 0.02}
+    if selection_profile == "algorithmic-breakout-score-v1":
+        return {
+            "min_total_score": 70,
+            "normal_priority_score": 85,
+            "component_weights": {
+                "cost_feasibility": 15,
+                "btc_eth_regime": 15,
+                "market_breadth": 15,
+                "relative_strength": 15,
+                "volatility_compression": 15,
+                "volume_activity_expansion": 10,
+                "atr_breakout_distance": 10,
+                "multi_timeframe_trend": 5,
+            },
+        }
     msg = f"unsupported portfolio selection profile: {selection_profile}"
     raise ValueError(msg)
 
@@ -705,6 +788,12 @@ def _portfolio_selection_blocker(
     slippage: float,
 ) -> str | None:
     if selection_profile == "none":
+        return None
+    if selection_profile == "algorithmic-breakout-score-v1":
+        if trade.algorithmic_score_total is None or trade.algorithmic_score_bucket is None:
+            return "portfolio_selection_algorithmic_score_unavailable"
+        if trade.algorithmic_score_bucket == "blocked":
+            return "portfolio_selection_algorithmic_score_below_threshold"
         return None
     if selection_profile != "cost-feasible-v1":
         msg = f"unsupported portfolio selection profile: {selection_profile}"
@@ -721,12 +810,79 @@ def _portfolio_selection_blocker(
 def _selection_skip_counts(trades: list[PortfolioTrade]) -> dict[str, int]:
     counts: dict[str, int] = {}
     for trade in trades:
-        if trade.accepted or trade.blocker is None or not trade.blocker.startswith(
-            "portfolio_selection_"
+        if (
+            trade.accepted
+            or trade.blocker is None
+            or not trade.blocker.startswith("portfolio_selection_")
         ):
             continue
         counts[trade.blocker] = counts.get(trade.blocker, 0) + 1
     return counts
+
+
+def _algorithmic_score_from_feature_row(
+    feature_row: dict[str, str],
+    *,
+    entry_price: float,
+    spread: float,
+    slippage: float,
+):
+    inputs = score_input_from_feature_row(
+        feature_row,
+        entry_price=entry_price if entry_price > 0 else 1e-9,
+        spread=spread,
+        slippage_per_unit=slippage,
+    )
+    return calculate_algorithmic_breakout_score(inputs)
+
+
+def _score_distribution(trades: list[PortfolioTrade]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for trade in trades:
+        if trade.algorithmic_score_bucket is not None:
+            key = trade.algorithmic_score_bucket
+            counts[key] = counts.get(key, 0) + 1
+        if trade.algorithmic_score_total is None:
+            continue
+        lower = (trade.algorithmic_score_total // 10) * 10
+        upper = min(100, lower + 9)
+        key = "100" if lower == 100 else f"{lower}-{upper}"
+        counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
+def _aggregate_score_distribution(windows: list[PortfolioWindowSummary]) -> dict[str, int]:
+    output: dict[str, int] = {}
+    for window in windows:
+        for key, value in window.selection_score_distribution.items():
+            output[key] = output.get(key, 0) + value
+    return output
+
+
+def _selection_priority(trade: PortfolioTrade) -> int:
+    if trade.algorithmic_score_bucket == "normal_priority":
+        return 0
+    if trade.algorithmic_score_bucket == "reduced_priority":
+        return 1
+    if trade.algorithmic_score_bucket == "blocked":
+        return 2
+    return 1
+
+
+def _selection_ordered_trades(
+    trades: list[PortfolioTrade], *, selection_profile: str
+) -> list[PortfolioTrade]:
+    if selection_profile != "algorithmic-breakout-score-v1":
+        return trades
+    return sorted(
+        trades,
+        key=lambda item: (
+            item.entry_time,
+            _selection_priority(item),
+            item.symbol,
+            item.source_trade_id or "",
+        ),
+    )
 
 
 def _regime_contributions(
@@ -755,7 +911,9 @@ def _regime_contributions(
                 regime_decision=decision,
                 trade_count=len(regime_trades),
                 accepted_trade_count=len(accepted),
-                skipped_blocked_signal_count=sum(1 for trade in regime_trades if not trade.accepted),
+                skipped_blocked_signal_count=sum(
+                    1 for trade in regime_trades if not trade.accepted
+                ),
                 lifecycle_state_counts=_trade_lifecycle_state_counts(regime_trades),
                 pnl_contribution=pnl,
                 drawdown_contribution=min(pnl, 0.0) / 10_000.0,
@@ -773,13 +931,19 @@ def _portfolio_equity(
         {"timestamp": to_utc(window.start).isoformat(), "equity": equity, "drawdown": 0.0}
     ]
     max_drawdown = 0.0
-    for trade in sorted((item for item in trades if item.accepted), key=lambda item: item.exit_time):
+    for trade in sorted(
+        (item for item in trades if item.accepted), key=lambda item: item.exit_time
+    ):
         equity += trade.net_pnl
         peak = max(peak, equity)
         drawdown = (equity - peak) / peak if peak > 0 else 0.0
         max_drawdown = min(max_drawdown, drawdown)
-        rows.append({"timestamp": trade.exit_time.isoformat(), "equity": equity, "drawdown": drawdown})
-    rows.append({"timestamp": to_utc(window.end).isoformat(), "equity": equity, "drawdown": max_drawdown})
+        rows.append(
+            {"timestamp": trade.exit_time.isoformat(), "equity": equity, "drawdown": drawdown}
+        )
+    rows.append(
+        {"timestamp": to_utc(window.end).isoformat(), "equity": equity, "drawdown": max_drawdown}
+    )
     return rows, max_drawdown
 
 
@@ -835,7 +999,9 @@ def _apply_trade_counts_to_contributions(
             contribution.model_copy(
                 update={
                     "accepted_trade_count": sum(1 for trade in symbol_trades if trade.accepted),
-                    "skipped_exposure_trade_count": sum(1 for trade in symbol_trades if not trade.accepted),
+                    "skipped_exposure_trade_count": sum(
+                        1 for trade in symbol_trades if not trade.accepted
+                    ),
                     "net_profit": sum(trade.net_pnl for trade in symbol_trades if trade.accepted),
                 }
             )
@@ -913,7 +1079,9 @@ def _quarter_diagnostic_rows(
 ) -> list[dict[str, object]]:
     output: list[dict[str, object]] = []
     for window in windows:
-        window_contributions = [item for item in contributions if item.window_label == window.window_label]
+        window_contributions = [
+            item for item in contributions if item.window_label == window.window_label
+        ]
         window_regimes = [item for item in regimes if item.window_label == window.window_label]
         regime_map = {item.regime_label: item for item in window_regimes}
         unavailable: list[str] = []
@@ -923,16 +1091,24 @@ def _quarter_diagnostic_rows(
             unavailable.append("btcusdt_context_regime")
         if eth_context == "unavailable":
             unavailable.append("ethusdt_context_regime")
-        relative_strength_vs_btc = _relative_strength(window.net_profit, window_contributions, "BTCUSDT")
-        relative_strength_vs_eth = _relative_strength(window.net_profit, window_contributions, "ETHUSDT")
+        relative_strength_vs_btc = _relative_strength(
+            window.net_profit, window_contributions, "BTCUSDT"
+        )
+        relative_strength_vs_eth = _relative_strength(
+            window.net_profit, window_contributions, "ETHUSDT"
+        )
         if relative_strength_vs_btc == "unavailable":
             unavailable.append("relative_strength_vs_btcusdt")
         if relative_strength_vs_eth == "unavailable":
             unavailable.append("relative_strength_vs_ethusdt")
         cost_skip_ratio: float | str = "unavailable"
         if selection_profile == "cost-feasible-v1":
-            skipped_for_cost = window.selection_skip_counts.get("portfolio_selection_cost_feasibility", 0)
-            cost_skip_ratio = skipped_for_cost / window.trade_count if window.trade_count else "unavailable"
+            skipped_for_cost = window.selection_skip_counts.get(
+                "portfolio_selection_cost_feasibility", 0
+            )
+            cost_skip_ratio = (
+                skipped_for_cost / window.trade_count if window.trade_count else "unavailable"
+            )
         if cost_skip_ratio == "unavailable":
             unavailable.append("cost_feasibility_skip_ratio")
         unavailable.extend(["confirmation_retest_availability_ratio", "fast_failure_exit_ratio"])
@@ -947,24 +1123,36 @@ def _quarter_diagnostic_rows(
                 "candidate_count": window.trade_count,
                 "accepted_trade_count": window.accepted_trade_count,
                 "skipped_signal_count": window.skipped_exposure_trade_count,
-                "selection_skip_counts_json": json.dumps(window.selection_skip_counts, sort_keys=True),
+                "selection_skip_counts_json": json.dumps(
+                    window.selection_skip_counts, sort_keys=True
+                ),
                 "blocked_symbol_count": window.blocked_symbol_count,
                 "net_profit": window.net_profit,
-                "profit_factor": window.profit_factor if window.profit_factor is not None else "unavailable",
-                "max_drawdown": window.max_drawdown if window.max_drawdown is not None else "unavailable",
+                "profit_factor": window.profit_factor
+                if window.profit_factor is not None
+                else "unavailable",
+                "max_drawdown": window.max_drawdown
+                if window.max_drawdown is not None
+                else "unavailable",
                 "bull_long_trade_count": bull.trade_count if bull else 0,
                 "bull_long_pnl_contribution": bull.pnl_contribution if bull else 0.0,
                 "bull_long_drawdown_contribution": bull.drawdown_contribution if bull else 0.0,
                 "bear_short_or_avoid_trade_count": bear.trade_count if bear else 0,
-                "bear_short_or_avoid_skipped_signal_count": bear.skipped_blocked_signal_count if bear else 0,
+                "bear_short_or_avoid_skipped_signal_count": bear.skipped_blocked_signal_count
+                if bear
+                else 0,
                 "bear_short_or_avoid_pnl_contribution": bear.pnl_contribution if bear else 0.0,
                 "neutral_blocked_trade_count": neutral.trade_count if neutral else 0,
-                "neutral_blocked_skipped_signal_count": neutral.skipped_blocked_signal_count if neutral else 0,
+                "neutral_blocked_skipped_signal_count": neutral.skipped_blocked_signal_count
+                if neutral
+                else 0,
                 "neutral_blocked_pnl_contribution": neutral.pnl_contribution if neutral else 0.0,
                 "btcusdt_context_regime": btc_context,
                 "ethusdt_context_regime": eth_context,
                 "fixed_universe_symbol_count": len(window_contributions),
-                "fixed_universe_positive_symbol_ratio": _positive_symbol_ratio(window_contributions),
+                "fixed_universe_positive_symbol_ratio": _positive_symbol_ratio(
+                    window_contributions
+                ),
                 "fixed_universe_blocked_symbol_ratio": _blocked_symbol_ratio(window_contributions),
                 "relative_strength_vs_btcusdt": relative_strength_vs_btc,
                 "relative_strength_vs_ethusdt": relative_strength_vs_eth,
@@ -1032,7 +1220,9 @@ def _quarter_diagnostics_summary(rows: list[dict[str, object]]) -> dict[str, Any
         "unknown_windows": [str(row["window_label"]) for row in unknown],
         "strongest_observed_differences": differences[:8],
         "unavailable_fields": unavailable_fields,
-        "underpowered_warning": "too_few_comparable_status_groups" if not passed or not non_passing else None,
+        "underpowered_warning": "too_few_comparable_status_groups"
+        if not passed or not non_passing
+        else None,
         "causality_notice": "diagnostics are post-run outcome analysis and are not entry-time selectors",
     }
 
@@ -1078,7 +1268,9 @@ def _positive_symbol_ratio(contributions: list[PortfolioSymbolContribution]) -> 
 def _blocked_symbol_ratio(contributions: list[PortfolioSymbolContribution]) -> float | str:
     if not contributions:
         return "unavailable"
-    return sum(1 for item in contributions if _contribution_blocks_portfolio(item)) / len(contributions)
+    return sum(1 for item in contributions if _contribution_blocks_portfolio(item)) / len(
+        contributions
+    )
 
 
 def _portfolio_aggregate(
@@ -1090,7 +1282,9 @@ def _portfolio_aggregate(
     max_total_open_notional: float,
 ) -> PortfolioAggregate:
     failed = [window for window in windows if window.status != "passed"]
-    blockers = [f"{window.window_label}:{blocker}" for window in failed for blocker in window.blockers]
+    blockers = [
+        f"{window.window_label}:{blocker}" for window in failed for blocker in window.blockers
+    ]
     supported = bool(windows) and not failed
     technical_pass = bool(windows) and not any(
         _portfolio_window_has_technical_blocker(window) for window in windows
@@ -1179,6 +1373,7 @@ def _write_portfolio_scorecard(path: Path, windows: list[PortfolioWindowSummary]
             "accepted_trade_count",
             "skipped_exposure_trade_count",
             "selection_skip_counts_json",
+            "selection_score_distribution_json",
             "lifecycle_state_counts_json",
             "net_profit",
             "net_profit_buffer",
@@ -1199,6 +1394,9 @@ def _write_portfolio_scorecard(path: Path, windows: list[PortfolioWindowSummary]
                 "blockers": ";".join(window.blockers),
                 "selection_skip_counts_json": json.dumps(
                     window.selection_skip_counts, sort_keys=True, ensure_ascii=False
+                ),
+                "selection_score_distribution_json": json.dumps(
+                    window.selection_score_distribution, sort_keys=True, ensure_ascii=False
                 ),
                 "lifecycle_state_counts_json": json.dumps(
                     window.lifecycle_state_counts, sort_keys=True, ensure_ascii=False
@@ -1250,14 +1448,31 @@ def _write_portfolio_trades(path: Path, trades: list[PortfolioTrade]) -> None:
             "blocker",
             "regime_label",
             "regime_decision",
+            "algorithmic_score_total",
+            "algorithmic_score_components",
+            "algorithmic_score_bucket",
+            "algorithmic_score_rejection_reasons",
+            "algorithmic_score_unavailable_components",
             "furthest_lifecycle_state",
             "lifecycle_state_counts",
             "source_trade_id",
             "source_candidate_id",
             "source_artifact_dir",
         ],
-        [trade.model_dump(mode="json") for trade in trades],
+        [_portfolio_trade_csv_row(trade) for trade in trades],
     )
+
+
+def _portfolio_trade_csv_row(trade: PortfolioTrade) -> dict[str, object]:
+    row = trade.model_dump(mode="json")
+    row["algorithmic_score_components"] = json.dumps(
+        trade.algorithmic_score_components, sort_keys=True, ensure_ascii=False
+    )
+    row["algorithmic_score_rejection_reasons"] = ";".join(trade.algorithmic_score_rejection_reasons)
+    row["algorithmic_score_unavailable_components"] = ";".join(
+        trade.algorithmic_score_unavailable_components
+    )
+    return row
 
 
 def _write_regime_contributions(path: Path, rows: list[PortfolioRegimeContribution]) -> None:
@@ -1327,18 +1542,26 @@ def _resolve_windows(args: argparse.Namespace) -> list[BatchWindow]:
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Run shared-bankroll public crypto portfolio batches")
+    parser = argparse.ArgumentParser(
+        description="Run shared-bankroll public crypto portfolio batches"
+    )
     parser.add_argument("--preset", choices=["quarterly-2023-2024"])
     parser.add_argument("--windows")
     parser.add_argument("--windows-file")
-    parser.add_argument("--universe", choices=["fixed-50-altcoins", "ethusdt-only"], default="fixed-50-altcoins")
+    parser.add_argument(
+        "--universe", choices=["fixed-50-altcoins", "ethusdt-only"], default="fixed-50-altcoins"
+    )
     parser.add_argument("--output-dir", default="artifacts/altcoin-universe-portfolio-comparison")
     parser.add_argument("--market-data-dir", default="artifacts/batch-market-data")
     parser.add_argument("--gate-profile", required=True)
     parser.add_argument("--starting-equity", type=float, default=10_000.0)
     parser.add_argument("--max-trade-notional", type=float, default=1_000.0)
     parser.add_argument("--max-total-open-notional", type=float, default=3_000.0)
-    parser.add_argument("--selection-profile", choices=["none", "cost-feasible-v1"], default="none")
+    parser.add_argument(
+        "--selection-profile",
+        choices=["none", "cost-feasible-v1", "algorithmic-breakout-score-v1"],
+        default="none",
+    )
     parser.add_argument("--spread", type=float, default=1.0)
     parser.add_argument("--slippage", type=float, default=0.5)
     parser.add_argument("--commission-rate", type=float, default=0.00055)
@@ -1369,7 +1592,11 @@ def main(argv: list[str] | None = None) -> int:
         stop_on_symbol_error=args.stop_on_symbol_error,
         max_workers=args.max_workers,
     )
-    print(json.dumps(result.summary.model_dump(mode="json"), sort_keys=True, indent=2, ensure_ascii=False))
+    print(
+        json.dumps(
+            result.summary.model_dump(mode="json"), sort_keys=True, indent=2, ensure_ascii=False
+        )
+    )
     return 0
 
 
