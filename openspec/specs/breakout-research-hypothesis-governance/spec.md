@@ -231,3 +231,15 @@ The crypto breakout research loop SHALL allow a deterministic, opt-in cost-feasi
 - **WHEN** the cost-feasibility portfolio hypothesis is evaluated beyond smoke
 - **THEN** success still requires all eight quarters `2023q1`, `2023q2`, `2023q3`, `2023q4`, `2024q1`, `2024q2`, `2024q3`, and `2024q4` to pass as one combined shared-bankroll portfolio under realistic costs with complete regime reporting and no missing feed gaps for the promoted universe run
 - **AND** a result below `8/8` is recorded as falsified/negative evidence rather than success.
+
+### Requirement: Source research documents are readable and render cleanly
+Source research documents under `doc/ai/task/` that guide breakout implementation SHALL be readable in normal Markdown viewers and SHALL avoid broken generated citation artifacts, unbalanced code fences, and avoidable preview-breaking diagram syntax.
+
+#### Scenario: Deep research report is opened by a reader
+- **WHEN** a reader opens `doc/ai/task/deep-research-report.md`
+- **THEN** the H1 title matches the repository name
+- **AND** the main prose is Russian-first and scan-friendly
+- **AND** raw generated citation artifacts such as `...` are not visible
+- **AND** fenced code blocks are balanced
+- **AND** the document preserves the substantive strategy, risk, FSM, architecture, configuration, testing, acceptance, documentation, and security requirements
+- **AND** the cleanup does not introduce source-code, dependency, runtime, live-trading, generated-artifact, or credential changes
