@@ -241,5 +241,6 @@ Source research documents under `doc/ai/task/` that guide breakout implementatio
 - **AND** the main prose is Russian-first and scan-friendly
 - **AND** raw generated citation artifacts such as `...` are not visible
 - **AND** fenced code blocks are balanced
+- **AND** Mermaid diagrams use GitHub-safe syntax and do not rely on fragile reverse flowchart arrows
 - **AND** the document preserves the substantive strategy, risk, FSM, architecture, configuration, testing, acceptance, documentation, and security requirements
 - **AND** the cleanup does not introduce source-code, dependency, runtime, live-trading, generated-artifact, or credential changes

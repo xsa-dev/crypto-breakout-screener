@@ -306,9 +306,9 @@ flowchart LR
     O --> G
     O --> H
 
-    P[Monitoring and Alerts] <-- H
-    P <-- G
-    P <-- B
+    H --> P[Monitoring and Alerts]
+    G --> P
+    B --> P
 
     Q[UI and Reporting] --> J
     Q --> K
