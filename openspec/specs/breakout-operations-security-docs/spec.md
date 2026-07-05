@@ -2,7 +2,6 @@
 
 ## Purpose
 Define local operational safety, degraded-mode protection, secret-handling, documentation, and deferred operator-surface requirements for the breakout strategy before any live or production execution scope is approved.
-
 ## Requirements
 ### Requirement: Monitoring and degraded mode protect trading
 The system SHALL implement local health/degraded-mode checks that detect stale market data, configuration errors, fake broker/order mismatch, and risk-stop states, and SHALL block new entries while degraded.
@@ -44,11 +43,18 @@ The system SHALL document least-privilege API access, secret rotation, role sepa
 - **THEN** it includes secret handling, environment variables, permissions, network/TLS assumptions, backup/rollback, and incident contacts/checklists
 
 ### Requirement: Operator documentation is complete
-The repository SHALL include task-oriented local documentation for setup, configuration, dry-run operation, operator workflows, API/web surfaces, test methodology, runbook procedures, deployment assumptions, security handling, QA checklist, and config changelog expectations.
+The repository SHALL include task-oriented local documentation for setup, configuration, dry-run operation, operator workflows, API/web surfaces, test methodology, runbook procedures, deployment assumptions, security handling, QA checklist, config changelog expectations, and an up-to-date README overview of the current repository purpose, runtime entrypoints, research/backtest entrypoints, data/artifact locations, and safety limitations.
 
 #### Scenario: Operator follows feed-gap runbook
 - **WHEN** a feed-gap alert or degraded state occurs
 - **THEN** the runbook explains how to inspect data health, trading mode, broker/fake adapter state, recovery conditions, and safe restart steps
+
+#### Scenario: Reader or operator starts from README
+- **WHEN** a reader opens `README.md`
+- **THEN** it describes the repository as the current Bybit tradebot plus breakout screener/research codebase rather than a generic template
+- **AND** it points to setup, verification, runtime, admin, breakout research/backtesting, artifact, OpenSpec, and operations documentation paths that exist in the repository
+- **AND** it states credentialed behavior and dry-run/fake breakout execution limits without embedding secrets
+- **AND** its main explanatory prose is written in Russian while preserving commands, paths, module names, and canonical technical terms as needed
 
 ### Requirement: Legal and broker constraints are configurable policy inputs
 The system SHALL allow project-specific broker, exchange, and jurisdictional constraints to be documented and enforced as policy where applicable.
