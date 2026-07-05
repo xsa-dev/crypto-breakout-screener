@@ -56,6 +56,16 @@ The repository SHALL include task-oriented local documentation for setup, config
 - **AND** it states credentialed behavior and dry-run/fake breakout execution limits without embedding secrets
 - **AND** its main explanatory prose is written in Russian while preserving commands, paths, module names, and canonical technical terms as needed
 
+#### Scenario: Code agent indexes source documents
+- **WHEN** a code agent or maintainer needs to use the repository documentation for breakout implementation, review, or research planning
+- **THEN** the `docs/` tree provides a root documentation index and a code-agent usage guide
+- **AND** source materials under `docs/ai/task/` are classified by role, including authoritative strategy sources, visual/PDF sources, research evidence, and indexing caveats
+- **AND** a machine-readable source manifest lists every source material path, type, language, status, topics, and companion-text availability
+- **AND** key source requirements have stable documentation IDs and source-to-spec/code traceability tables
+- **AND** visual source materials that are not text-indexable have either a companion transcript/extracted text file or an explicit `needs_extraction` caveat
+- **AND** the documentation warns that source strategy documents do not approve live/full-auto trading or override negative realistic-cost research evidence
+- **AND** the indexing layer does not introduce source-code, dependency, lockfile, runtime, generated-artifact, live-trading, or credential changes
+
 ### Requirement: Legal and broker constraints are configurable policy inputs
 The system SHALL allow project-specific broker, exchange, and jurisdictional constraints to be documented and enforced as policy where applicable.
 

@@ -25,6 +25,28 @@ This guide covers the local breakout strategy slices implemented in this reposit
 - `src.web` remains the existing local FastAPI admin surface for the template. This change does not add a new operator dashboard.
 - The safe execution path is dry-run/fake execution only. Live broker credentials and concrete live adapters are out of scope.
 
+## Code-agent usage
+
+Use this guide when changing or reviewing local operational behavior for:
+
+- degraded-mode checks and reason propagation;
+- fake execution reconciliation;
+- risk-stop behavior and entry blocking;
+- local dry-run safety documentation;
+- QA, security, and release checklist wording.
+
+Do not use this guide to approve live broker execution, production full-auto operation, concrete exchange adapters, cloud monitoring, or credentialed trading. Those scopes require a separate approved OpenSpec change.
+
+| Reason code | Meaning | Likely modules | Expected behavior |
+|---|---|---|---|
+| `feed_degraded` | Market data is missing, stale, or otherwise unsafe for new entries. | `src/app/breakout/health.py`, `src/app/breakout/risk_manager.py` | Reject new entries until fresh data produces a healthy check. |
+| `config_invalid` | Startup/runtime config validation reported errors. | `src/core/config.py`, `src/core/env.py`, `src/app/breakout/health.py` | Reject new entries until config errors are fixed and rechecked. |
+| `broker_state_mismatch` | Fake adapter reconciliation differs from expected local state. | `src/app/breakout/execution.py`, `src/app/breakout/health.py` | Block new entries; reconcile deterministic fake orders/fills before continuing. |
+| `fake_broker_state_mismatch` | Health-check reason for fake broker state mismatch. | `src/app/breakout/health.py`, `src/app/breakout/execution.py` | Treat as degraded and map into risk rejection context. |
+| `daily_loss_limit_reached` | Daily loss cap is already reached. | `src/app/breakout/risk_manager.py`, `src/app/breakout/health.py` | Stop new entries for the configured risk window. |
+| `max_positions_reached` | Maximum allowed concurrent positions is already reached. | `src/app/breakout/risk_manager.py`, `src/app/breakout/health.py` | Reject additional entries until exposure decreases. |
+| `health_degraded` | Aggregated health report is degraded. | `src/app/breakout/health.py`, `src/app/breakout/risk_manager.py` | Reject new entries and expose specific underlying reasons where available. |
+
 ## Health and degraded mode
 
 `HealthMonitor` in `src/app/breakout/health.py` evaluates local checks and produces a `HealthReport` with machine-readable reasons.

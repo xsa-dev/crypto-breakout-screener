@@ -1,0 +1,101 @@
+version: 1
+updated: '2026-07-05'
+root: docs/ai/task
+sources:
+  - id: breakout-deep-research-report
+    path: docs/ai/task/deep-research-report.md
+    type: markdown_report
+    role: authoritative_strategy_source
+    status: authoritative
+    language: ru
+    text_indexable: true
+    text_companion: null
+    topics:
+      - breakout_strategy
+      - level_detection
+      - setup_scoring
+      - entry_modes
+      - finite_state_machine
+      - risk_management
+      - architecture
+      - configuration
+      - testing_acceptance
+      - security
+    use_when:
+      - creating_or_reviewing_breakout_strategy_changes
+      - mapping_source_requirements_to_openspec
+      - checking_no_lookahead_or_fsm_requirements
+    caveats:
+      - does_not_approve_live_or_full_auto_execution
+      - does_not_prove_current_profitability
+
+  - id: breakout-infographic-original
+    path: docs/ai/task/IMG_2656.JPEG
+    type: image
+    role: visual_source
+    status: authoritative
+    language: ru
+    text_indexable: false
+    text_companion: docs/ai/task/IMG_2656.transcript.md
+    needs_extraction: false
+    topics:
+      - breakout_strategy
+      - retest
+      - entry_modes
+      - breakout_score
+      - risk_manager
+      - state_machine
+      - scenario_selection
+      - market_context
+    use_when:
+      - confirming_visual_rules_or_percentages
+      - validating_transcript_against_original_source
+    caveats:
+      - use_transcript_for_text_search
+      - inspect_original_image_for_visual_precision
+
+  - id: breakout-pdf-original
+    path: docs/ai/task/Торговля пробоев.pdf
+    type: pdf
+    role: visual_source
+    status: authoritative
+    language: ru
+    text_indexable: false
+    text_companion: null
+    needs_extraction: true
+    topics:
+      - breakout_strategy
+      - original_method_source
+    use_when:
+      - confirming_original_source_material_after_extraction_or_visual_review
+    caveats:
+      - current_text_reader_returns_binary_unusable_output
+      - do_not_fabricate_extracted_text
+
+  - id: breakout-realistic-cost-timeout-2026-06-28
+    path: docs/ai/task/breakout-realistic-cost-timeout-2026-06-28.md
+    type: decision_record
+    role: research_evidence
+    status: current_negative_evidence
+    language: en
+    text_indexable: true
+    text_companion: null
+    topics:
+      - realistic_costs
+      - portfolio_research
+      - negative_evidence
+      - timeout_decision
+      - reassessment_questions
+    use_when:
+      - planning_next_research_hypothesis
+      - checking_robustness_claims
+      - avoiding_parameter_chasing
+    caveats:
+      - not_a_source_strategy_specification
+      - does_not_replace_authoritative_strategy_sources
+
+related_indexes:
+  - docs/ai/task/requirements-index.md
+  - docs/ai/task/source-traceability.md
+  - docs/CODEAGENT.md
+  - docs/README.md
