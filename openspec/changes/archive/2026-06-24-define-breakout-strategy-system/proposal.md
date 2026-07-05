@@ -1,6 +1,6 @@
 ## Why
 
-The supplied `doc/ai/task/deep-research-report.md`, `doc/ai/task/Торговля пробоев.pdf`, and `doc/ai/task/IMG_2656.JPEG` define a breakout trading system that is much broader than the previous Bybit pump-retrace robot. The project needs OpenSpec requirements that capture the full breakout methodology before source implementation begins.
+The supplied `docs/ai/task/deep-research-report.md`, `docs/ai/task/Торговля пробоев.pdf`, and `docs/ai/task/IMG_2656.JPEG` define a breakout trading system that is much broader than the previous Bybit pump-retrace robot. The project needs OpenSpec requirements that capture the full breakout methodology before source implementation begins.
 
 ## What Changes
 
@@ -38,5 +38,5 @@ None. Existing active OpenSpec capabilities are absent; the previous unrelated c
 - Affected future code areas: data ingestion/normalization, strategy engines, risk/execution modules, persistence schema, admin/config UI, reporting, tests, and docs.
 - Affected future data model: bars, ticks, optional order book, levels, features, signals, orders, fills, positions, risk events, backtest runs, and config versions.
 - Affected verification: unit tests, replay tests, backtests, walk-forward validation, Monte Carlo analysis, static checks, and no-live-trade safety gates.
-- Source materials: `doc/ai/task/deep-research-report.md`, `doc/ai/task/Торговля пробоев.pdf`, and `doc/ai/task/IMG_2656.JPEG`.
+- Source materials: `docs/ai/task/deep-research-report.md`, `docs/ai/task/Торговля пробоев.pdf`, and `docs/ai/task/IMG_2656.JPEG`.
 - Deferred scope: live broker execution, production full-auto, concrete MT5/Bybit/live adapters, backtesting/reporting implementation, UI/operator dashboard, and monitoring/ops/production hardening are specification targets here but implementation NO-GO without later dedicated OpenSpec changes.

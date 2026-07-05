@@ -1,7 +1,7 @@
 ## ADDED Requirements
 
 ### Requirement: Breakout research implements the supplied screener documentation
-The breakout research loop SHALL treat `doc/ai/task` as the primary algorithmic source for the screener/trading-system strategy and SHALL NOT replace it with unrelated strategy invention.
+The breakout research loop SHALL treat `docs/ai/task` as the primary algorithmic source for the screener/trading-system strategy and SHALL NOT replace it with unrelated strategy invention.
 
 #### Scenario: Implementation change is created
 - **WHEN** a breakout implementation OpenSpec change is proposed

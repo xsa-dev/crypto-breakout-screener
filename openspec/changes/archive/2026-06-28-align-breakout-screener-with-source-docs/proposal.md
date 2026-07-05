@@ -2,7 +2,7 @@
 
 ## Why
 
-The owner goal is not to invent a new trading strategy. The primary product goal is to implement a breakout screener/trading-system research loop based on the supplied source documentation in `doc/ai/task`:
+The owner goal is not to invent a new trading strategy. The primary product goal is to implement a breakout screener/trading-system research loop based on the supplied source documentation in `docs/ai/task`:
 
 - `deep-research-report.md`;
 - `Торговля пробоев.pdf`;

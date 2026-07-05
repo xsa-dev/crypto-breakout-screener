@@ -2,7 +2,7 @@
 
 ## Why
 
-`doc/ai/task/deep-research-report.md` is an important Russian source document for the breakout strategy, but it currently has readability and rendering problems:
+`docs/ai/task/deep-research-report.md` is an important Russian source document for the breakout strategy, but it currently has readability and rendering problems:
 
 - raw citation placeholders such as `cite...` and `filecite...` leak into the document and render as broken glyphs in normal Markdown viewers;
 - the current H1 title is an outdated generic name and does not match the repository identity;
@@ -14,7 +14,7 @@ The user explicitly asked to make the file readable and fix rendering errors. Th
 
 ## What Changes
 
-Rewrite and polish `doc/ai/task/deep-research-report.md` for readable Russian Markdown:
+Rewrite and polish `docs/ai/task/deep-research-report.md` for readable Russian Markdown:
 
 - remove or replace broken raw citation placeholders with readable source notes or a short note that the original source references were embedded in the generated report;
 - update the document title to match the repository name while preserving the subtitle/meaning that it is a breakout strategy technical brief;
@@ -26,7 +26,7 @@ Rewrite and polish `doc/ai/task/deep-research-report.md` for readable Russian Ma
 
 ## Success Criteria
 
-- `doc/ai/task/deep-research-report.md` renders cleanly in normal Markdown preview without visible `...` citation artifacts.
+- `docs/ai/task/deep-research-report.md` renders cleanly in normal Markdown preview without visible `...` citation artifacts.
 - The H1 title uses the repository name rather than the outdated generic title.
 - The main document remains Russian-first and easier to scan.
 - Technical content is preserved: strategy stages, entry modes, risk rules, FSM, architecture modules, config parameters, testing/acceptance, docs/security sections.

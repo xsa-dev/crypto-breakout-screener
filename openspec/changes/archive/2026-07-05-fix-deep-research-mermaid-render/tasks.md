@@ -1,5 +1,5 @@
 ## 1. Mermaid render fix
-- [x] 1.1 Inspect remaining Mermaid blocks in `doc/ai/task/deep-research-report.md`.
+- [x] 1.1 Inspect remaining Mermaid blocks in `docs/ai/task/deep-research-report.md`.
 - [x] 1.2 Replace GitHub-fragile reverse `flowchart` arrows with GitHub-safe forward arrows while preserving meaning.
 
 ## 2. Verification

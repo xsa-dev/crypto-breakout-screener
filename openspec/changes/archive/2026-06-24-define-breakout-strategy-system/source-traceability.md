@@ -4,9 +4,9 @@ This matrix maps the supplied breakout source materials to OpenSpec capabilities
 
 ## Source files
 
-- `doc/ai/task/deep-research-report.md`
-- `doc/ai/task/Торговля пробоев.pdf`
-- `doc/ai/task/IMG_2656.JPEG`
+- `docs/ai/task/deep-research-report.md`
+- `docs/ai/task/Торговля пробоев.pdf`
+- `docs/ai/task/IMG_2656.JPEG`
 
 ## Deep research report → specs
 

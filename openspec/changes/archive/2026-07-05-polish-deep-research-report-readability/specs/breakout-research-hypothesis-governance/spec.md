@@ -1,10 +1,10 @@
 ## ADDED Requirements
 
 ### Requirement: Source research documents are readable and render cleanly
-Source research documents under `doc/ai/task/` that guide breakout implementation SHALL be readable in normal Markdown viewers and SHALL avoid broken generated citation artifacts, unbalanced code fences, and avoidable preview-breaking diagram syntax.
+Source research documents under `docs/ai/task/` that guide breakout implementation SHALL be readable in normal Markdown viewers and SHALL avoid broken generated citation artifacts, unbalanced code fences, and avoidable preview-breaking diagram syntax.
 
 #### Scenario: Deep research report is opened by a reader
-- **WHEN** a reader opens `doc/ai/task/deep-research-report.md`
+- **WHEN** a reader opens `docs/ai/task/deep-research-report.md`
 - **THEN** the H1 title matches the repository name
 - **AND** the main prose is Russian-first and scan-friendly
 - **AND** raw generated citation artifacts such as `...` are not visible

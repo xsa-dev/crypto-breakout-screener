@@ -4,7 +4,7 @@
 
 Documentation-only readability pass for:
 
-- `doc/ai/task/deep-research-report.md`
+- `docs/ai/task/deep-research-report.md`
 
 Allowed edits:
 
@@ -61,7 +61,7 @@ After implementation:
 - `npx --yes @fission-ai/openspec@1.4.1 validate --all --strict --no-interactive`
 - `git diff --check`
 - targeted Markdown sanity script:
-  - confirm `doc/ai/task/deep-research-report.md` has no `` artifacts;
+  - confirm `docs/ai/task/deep-research-report.md` has no `` artifacts;
   - confirm fenced code blocks are balanced;
   - report remaining lines over 220 characters;
   - confirm the H1 title matches the repository name;

@@ -1,10 +1,10 @@
 ## 1. Baseline review
-- [x] 1.1 Inspect `doc/ai/task/deep-research-report.md`.
+- [x] 1.1 Inspect `docs/ai/task/deep-research-report.md`.
 - [x] 1.2 Scan for rendering/readability issues: raw citation artifacts, beta Mermaid chart snippets, and very long lines.
 - [x] 1.3 Confirm current git status and unrelated staged/dirty files before editing.
 
 ## 2. Documentation polish
-- [x] 2.1 Rewrite `doc/ai/task/deep-research-report.md` as readable Russian Markdown while preserving the ТЗ/source-report structure.
+- [x] 2.1 Rewrite `docs/ai/task/deep-research-report.md` as readable Russian Markdown while preserving the ТЗ/source-report structure.
 - [x] 2.2 Remove raw `...` citation artifacts or replace them with readable source notes.
 - [x] 2.3 Update the H1 title to match the repository name while keeping the breakout ТЗ meaning visible as subtitle/context.
 - [x] 2.4 Split dense prose into shorter paragraphs/bullets and keep tables/code blocks readable.

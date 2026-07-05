@@ -2,7 +2,7 @@
 
 ## Source of truth
 
-The source documentation in `doc/ai/task` is the authoritative description of the intended strategy. Implementation changes should map to these blocks:
+The source documentation in `docs/ai/task` is the authoritative description of the intended strategy. Implementation changes should map to these blocks:
 
 - level engine: pivot high/low, round numbers, daily high/low, cascade levels, trendline/naklonnaya;
 - setup scoring: consolidation, slow approach, trend, volume/activity, density/support or proxy;

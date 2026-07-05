@@ -189,27 +189,13 @@ The crypto breakout research loop SHALL classify deterministic market regimes fo
 - **AND** a portfolio `8/8` pass is not accepted if bear or ambiguous intervals are silently averaged into the long bucket without explicit regime rules.
 
 ### Requirement: Breakout research implements the supplied screener documentation
-The breakout research loop SHALL treat `doc/ai/task` as the primary algorithmic source for the screener/trading-system strategy and SHALL NOT replace it with unrelated strategy invention.
+The breakout research loop SHALL treat `docs/ai/task` as the primary algorithmic source for the screener/trading-system strategy and SHALL NOT replace it with unrelated strategy invention.
 
-#### Scenario: Implementation change is created
-- **WHEN** a breakout implementation OpenSpec change is proposed
-- **THEN** it identifies which source-document algorithm block it implements, such as level search, setup score, entry mode, confirmation, retest, additions, false breakout, exit, risk management, or reporting
-- **AND** any deviation from the source documentation is recorded as a bounded implementation constraint rather than an invented strategy.
-
-#### Scenario: Historical evidence is classified
-- **WHEN** a backtest, smoke run, or promoted scorecard is reported
-- **THEN** the report classifies evidence as `concept_evidence`, `friction_light_evidence`, `realistic_cost_evidence`, or `falsified_or_blocked_evidence`
-- **AND** records universe, windows, cost assumptions, thresholds, and artifact paths.
-
-#### Scenario: Friction-light 8/8 exists
-- **WHEN** historical runs show `8/8` under favorable or missing execution costs
-- **THEN** the result is preserved as positive concept evidence for the documented screener
-- **AND** it is not claimed as realistic-cost production robustness unless realistic costs were included.
-
-#### Scenario: Realistic-cost run fails
-- **WHEN** a realistic-cost shared-bankroll run fails to reach `8/8`
-- **THEN** the result is recorded as robustness/execution-cost evidence for that implementation profile
-- **AND** it does not by itself invalidate the full documented screener when documented blocks remain unimplemented.
+#### Scenario: No active change exists but local evidence contains a next hypothesis
+- **WHEN** no active OpenSpec change exists
+- **AND** current specs, archived recommendations, docs, tests, code comments, or diagnostic artifacts identify a bounded unresolved breakout hypothesis
+- **THEN** the research loop treats that hypothesis as a local task
+- **AND** creates exactly one narrow OpenSpec change for that hypothesis before implementation
 
 ### Requirement: Portfolio cost-feasibility selection preserves the shared-bankroll success target
 The crypto breakout research loop SHALL allow a deterministic, opt-in cost-feasibility selection profile for shared-bankroll altcoin portfolio hypotheses without weakening the fixed universe, realistic costs, configured thresholds, or required quarterly scorecard.
@@ -233,10 +219,10 @@ The crypto breakout research loop SHALL allow a deterministic, opt-in cost-feasi
 - **AND** a result below `8/8` is recorded as falsified/negative evidence rather than success.
 
 ### Requirement: Source research documents are readable and render cleanly
-Source research documents under `doc/ai/task/` that guide breakout implementation SHALL be readable in normal Markdown viewers and SHALL avoid broken generated citation artifacts, unbalanced code fences, and avoidable preview-breaking diagram syntax.
+Source research documents under `docs/ai/task/` that guide breakout implementation SHALL be readable in normal Markdown viewers and SHALL avoid broken generated citation artifacts, unbalanced code fences, and avoidable preview-breaking diagram syntax.
 
 #### Scenario: Deep research report is opened by a reader
-- **WHEN** a reader opens `doc/ai/task/deep-research-report.md`
+- **WHEN** a reader opens `docs/ai/task/deep-research-report.md`
 - **THEN** the H1 title matches the repository name
 - **AND** the main prose is Russian-first and scan-friendly
 - **AND** raw generated citation artifacts such as `...` are not visible

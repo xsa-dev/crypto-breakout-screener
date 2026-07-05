@@ -2,7 +2,7 @@
 
 ## Why
 
-GitHub still reports a Mermaid rendering error in `doc/ai/task/deep-research-report.md` after the readability cleanup:
+GitHub still reports a Mermaid rendering error in `docs/ai/task/deep-research-report.md` after the readability cleanup:
 
 ```text
 Lexical error on line 25. Unrecognized text.
@@ -13,7 +13,7 @@ The remaining issue is the architecture `flowchart` block using reverse links (`
 
 ## What Changes
 
-- Update only `doc/ai/task/deep-research-report.md`.
+- Update only `docs/ai/task/deep-research-report.md`.
 - Replace fragile reverse Mermaid links with forward `-->` links or another GitHub-safe diagram form.
 - Preserve the architecture meaning and all existing prose/table content.
 

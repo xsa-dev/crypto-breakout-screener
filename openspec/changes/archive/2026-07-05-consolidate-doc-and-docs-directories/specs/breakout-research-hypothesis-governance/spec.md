@@ -1,5 +1,14 @@
 ## MODIFIED Requirements
 
+### Requirement: Breakout research implements the supplied screener documentation
+The breakout research loop SHALL treat `docs/ai/task` as the primary algorithmic source for the screener/trading-system strategy and SHALL NOT replace it with unrelated strategy invention.
+
+#### Scenario: No active change exists but local evidence contains a next hypothesis
+- **WHEN** no active OpenSpec change exists
+- **AND** current specs, archived recommendations, docs, tests, code comments, or diagnostic artifacts identify a bounded unresolved breakout hypothesis
+- **THEN** the research loop treats that hypothesis as a local task
+- **AND** creates exactly one narrow OpenSpec change for that hypothesis before implementation
+
 ### Requirement: Source research documents are readable and render cleanly
 Source research documents under `docs/ai/task/` that guide breakout implementation SHALL be readable in normal Markdown viewers and SHALL avoid broken generated citation artifacts, unbalanced code fences, and avoidable preview-breaking diagram syntax.
 
